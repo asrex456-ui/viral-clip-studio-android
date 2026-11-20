@@ -33,14 +33,44 @@ jobs:
           sed -i 's/compileSdk = .*/compileSdk = 36/g' android/app/build.gradle.kts
           sed -i 's/minSdk = .*/minSdk = 24/g' android/app/build.gradle.kts
           sed -i 's/targetSdk = .*/targetSdk = 36/g' android/app/build.gradle.kts
+          cat << 'EOF' >> android/build.gradle.kts
+
+          subprojects {
+              if (project.name != "app" && !project.state.executed) {
+                  afterEvaluate {
+                      val androidExt = extensions.findByName("android")
+                      if (androidExt != null) {
+                          val current = try {
+                              androidExt.javaClass.getMethod("getCompileSdk").invoke(androidExt) as? Int
+                          } catch (e: Exception) {
+                              null
+                          }
+                          if (current == null || current < 36) {
+                              try {
+                                  androidExt.javaClass.getMethod("setCompileSdk", Int::class.javaObjectType).invoke(androidExt, 36)
+                              } catch (e: Exception) {
+                                  try {
+                                      androidExt.javaClass.getMethod("compileSdkVersion", Int::class.java).invoke(androidExt, 36)
+                                  } catch (e2: Exception) {
+                                  }
+                              }
+                          }
+                      }
+                  }
+              }
+          }
+          EOF
 
       - name: Restore Custom Manifest & Pubspec
         run: |
           cp backup_files/pubspec.yaml pubspec.yaml
           cp backup_files/AndroidManifest.xml android/app/src/main/AndroidManifest.xml 2>/dev/null || true
 
-      - name: Get Flutter Dependencies
-        run: flutter pub get
+      - name: Get Flutter Dependencies & Patch Plugin SDK
+        run: |
+          flutter pub get
+          find "$HOME/.pub-cache/hosted/pub.dev" -name "build.gradle" -exec sed -i -E 's/^([[:space:]]*)(compileSdkVersion|compileSdk)([[:space:]]*=?[[:space:]]*|\()[[:space:]]*(3[0-5]|2[0-9])\)?/\1compileSdk 36/g' {} + 2>/dev/null || true
+          find "$HOME/.pub-cache/hosted/pub.dev" -name "build.gradle.kts" -exec sed -i -E 's/^([[:space:]]*)(compileSdkVersion|compileSdk)([[:space:]]*=?[[:space:]]*|\()[[:space:]]*(3[0-5]|2[0-9])\)?/\1compileSdk = 36/g' {} + 2>/dev/null || true
 
       - name: Build Release APK
         run: flutter build apk --release --target-platform android-arm64
