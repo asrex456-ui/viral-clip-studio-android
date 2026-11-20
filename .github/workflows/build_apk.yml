@@ -23,16 +23,16 @@ jobs:
         with:
           channel: 'stable'
 
-      - name: Initialize Android Platform Files
+      - name: Initialize & Configure Android SDK 36
         run: |
           mkdir -p backup_files
           cp -r android/app/src/main/AndroidManifest.xml backup_files/ 2>/dev/null || true
           cp pubspec.yaml backup_files/
+          rm -rf android
           flutter create . --project-name viral_clip_studio --org com.avinash
-          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle.kts
-          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle.kts
-          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/g' android/app/build.gradle 2>/dev/null || true
-          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle 2>/dev/null || true
+          sed -i 's/compileSdk = .*/compileSdk = 36/g' android/app/build.gradle.kts
+          sed -i 's/minSdk = .*/minSdk = 24/g' android/app/build.gradle.kts
+          sed -i 's/targetSdk = .*/targetSdk = 36/g' android/app/build.gradle.kts
 
       - name: Restore Custom Manifest & Pubspec
         run: |
