@@ -5,8 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
+import 'package:easy_video_editor/easy_video_editor.dart';
 
 const String appName = "Viral Clip Studio";
 const String appVersion = "1.0.0";
@@ -205,21 +204,16 @@ class _HomeWorkspaceState extends State<HomeWorkspace> {
       final outDir = await _getExportDir();
       final ts = DateTime.now().millisecondsSinceEpoch;
       final outPath = "${outDir.path}/Short_$ts.mp4";
-      final hook = (_hookController.text.trim().isEmpty ? "WAIT FOR THE ENDING" : _hookController.text.trim())
-          .replaceAll("'", "")
-          .replaceAll(":", "");
+      final int durMs = (int.tryParse(_shortsDuration) ?? 30) * 1000;
 
-      String vf = "crop=ih*9/16:ih,scale=720:1280,drawtext=text='$hook':fontcolor=yellow:fontsize=42:box=1:boxcolor=black@0.75:boxborderw=12:x=(w-text_w)/2:y=120";
-      if (!_isPro) {
-        vf += ",drawtext=text='$watermarkText':fontcolor=white@0.85:fontsize=24:box=1:boxcolor=black@0.5:boxborderw=8:x=(w-text_w)/2:y=1120";
-      }
+      final editor = VideoEditorBuilder(videoPath: _shortsVideoPath!)
+          .trim(startTimeMs: 0, endTimeMs: durMs)
+          .crop(aspectRatio: VideoAspectRatio.ratio9x16);
 
-      final cmd = '-y -ss 0 -t $_shortsDuration -i "$_shortsVideoPath" -vf "$vf" -c:v libx264 -pix_fmt yuv420p -preset ultrafast -crf 24 -c:a aac -b:a 128k "$outPath"';
-      final session = await FFmpegKit.execute(cmd);
-      final rc = await session.getReturnCode();
+      final resultPath = await editor.export(outputPath: outPath);
 
-      if (ReturnCode.isSuccess(rc)) {
-        setState(() => _statusText = "✅ Saved: $outPath");
+      if (resultPath != null) {
+        setState(() => _statusText = "✅ Saved: $resultPath");
       } else {
         setState(() => _statusText = "❌ Render failed. Doosri video try karein.");
       }
@@ -244,18 +238,18 @@ class _HomeWorkspaceState extends State<HomeWorkspace> {
       final outDir = await _getExportDir();
       final ts = DateTime.now().millisecondsSinceEpoch;
       final outPath = "${outDir.path}/BeatSync_$ts.mp4";
+      final int durMs = (int.tryParse(_beatDuration) ?? 30) * 1000;
 
-      String vf = "crop=ih*9/16:ih,scale=720:1280,fps=30";
-      if (!_isPro) {
-        vf += ",drawtext=text='$watermarkText':fontcolor=white@0.85:fontsize=24:box=1:boxcolor=black@0.5:boxborderw=8:x=(w-text_w)/2:y=1140";
-      }
+      final editor = VideoEditorBuilder(videoPath: _beatVideoPath!)
+          .trim(startTimeMs: 0, endTimeMs: durMs)
+          .crop(aspectRatio: VideoAspectRatio.ratio9x16)
+          .removeAudio()
+          .addAudio(audioPath: _beatAudioPath!);
 
-      final cmd = '-y -i "$_beatVideoPath" -i "$_beatAudioPath" -map 0:v:0 -map 1:a:0 -t $_beatDuration -vf "$vf" -c:v libx264 -pix_fmt yuv420p -preset ultrafast -crf 23 -c:a aac -b:a 160k -shortest "$outPath"';
-      final session = await FFmpegKit.execute(cmd);
-      final rc = await session.getReturnCode();
+      final resultPath = await editor.export(outputPath: outPath);
 
-      if (ReturnCode.isSuccess(rc)) {
-        setState(() => _statusText = "✅ Beat-Sync Saved: $outPath");
+      if (resultPath != null) {
+        setState(() => _statusText = "✅ Beat-Sync Saved: $resultPath");
       } else {
         setState(() => _statusText = "❌ Beat-Sync error.");
       }
@@ -342,7 +336,7 @@ class _HomeWorkspaceState extends State<HomeWorkspace> {
       children: [
         const Text("🎬 Viral Shorts Auto-Clipper", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
-        const Text("Apni video ko 9:16 vertical Shorts me hook text ke saath convert karein.", style: TextStyle(color: Colors.white60, fontSize: 13)),
+        const Text("Apni video ko 9:16 vertical Shorts me convert karein.", style: TextStyle(color: Colors.white60, fontSize: 13)),
         const SizedBox(height: 16),
         ElevatedButton.icon(
           style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48), backgroundColor: const Color(0xFF21262D)),
@@ -359,7 +353,7 @@ class _HomeWorkspaceState extends State<HomeWorkspace> {
         TextField(
           controller: _hookController,
           decoration: const InputDecoration(
-            labelText: "Viral Hook Text (e.g. WAIT FOR IT)",
+            labelText: "Viral Hook Title / Note",
             border: OutlineInputBorder(),
           ),
         ),
