@@ -13,11 +13,8 @@ dependencies:
   path_provider: ^2.1.2
   shared_preferences: ^2.2.2
   url_launcher: ^6.2.5
-  ffmpeg_kit_flutter_new: 1.6.1
+  ffmpeg_kit_flutter_new_min_gpl: ^1.6.1
   permission_handler: ^11.3.0
-
-dependency_overrides:
-  ffmpeg_kit_flutter_android: 1.6.1
 
 flutter:
   uses-material-design: true
