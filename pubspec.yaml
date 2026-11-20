@@ -16,5 +16,8 @@ dependencies:
   ffmpeg_kit_flutter_new: 1.6.1
   permission_handler: ^11.3.0
 
+dependency_overrides:
+  ffmpeg_kit_flutter_android: 1.6.1
+
 flutter:
   uses-material-design: true
