@@ -241,11 +241,9 @@ class _HomeWorkspaceState extends State<HomeWorkspace> {
       final int durMs = (int.tryParse(_beatDuration) ?? 30) * 1000;
 
       final editor = VideoEditorBuilder(videoPath: _beatVideoPath!)
-          .trim(startTimeMs: 0, endTimeMs: durMs)
-          .crop(aspectRatio: VideoAspectRatio.ratio9x16)
-          .removeAudio()
-          .addAudio(audioPath: _beatAudioPath!);
-
+    .trim(startTimeMs: 0, endTimeMs: durMs)
+    .crop(aspectRatio: VideoAspectRatio.ratio9x16)
+    .removeAudio();
       final resultPath = await editor.export(outputPath: outPath);
 
       if (resultPath != null) {
