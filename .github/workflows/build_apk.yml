@@ -2,29 +2,49 @@ name: Build Viral Clip Studio Android APK
 
 on:
   push:
-    branches: [ main, master ]
+    branches: [ main ]
   workflow_dispatch:
 
 jobs:
   build-apk:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
           java-version: '17'
-      - uses: subosito/flutter-action@v2
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
+
       - name: Initialize Android Platform Files
-        run: flutter create --platforms=android .
+        run: |
+          mkdir -p backup_files
+          cp -r android/app/src/main/AndroidManifest.xml backup_files/ 2>/dev/null || true
+          cp pubspec.yaml backup_files/
+          flutter create . --project-name viral_clip_studio --org com.avinash
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 35/g' android/app/build.gradle.kts
+          sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 24/g' android/app/build.gradle.kts
+          sed -i 's/compileSdkVersion flutter.compileSdkVersion/compileSdkVersion 35/g' android/app/build.gradle 2>/dev/null || true
+          sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 24/g' android/app/build.gradle 2>/dev/null || true
+
       - name: Restore Custom Manifest & Pubspec
-        run: git checkout -- android/app/src/main/AndroidManifest.xml pubspec.yaml lib/main.dart
+        run: |
+          cp backup_files/pubspec.yaml pubspec.yaml
+          cp backup_files/AndroidManifest.xml android/app/src/main/AndroidManifest.xml 2>/dev/null || true
+
       - name: Get Flutter Dependencies
         run: flutter pub get
+
       - name: Build Release APK
-        run: flutter build apk --release
+        run: flutter build apk --release --target-platform android-arm64
+
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
