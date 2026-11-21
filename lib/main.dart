@@ -1,19 +1,9 @@
-import 'dart:io';
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:url_launcher/url_launcher.dart';
 import 'package:easy_video_editor/easy_video_editor.dart';
-
-const String appName = "Viral Clip Studio";
-const String appVersion = "1.0.0";
-const String watermarkText = "Made with Viral Clip Studio";
-const String razorpayPaymentUrl = "https://razorpay.me/@avinashkumar7447";
-const List<String> activeLicenseKeys = ["VCS-NOV26-PRO", "VCS-DEC26-PRO", "VCS-PRO-998877"];
-const int planValidityDays = 30;
-const String adNetworkDirectUrl = "https://www.highperformanceformat.com";
+import 'package:gal/gal.dart';
+import 'package:razorpay_flutter/razorpay_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
   runApp(const ViralClipStudioApp());
@@ -25,441 +15,355 @@ class ViralClipStudioApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: appName,
+      title: 'Viral Clip Studio',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
-        scaffoldBackgroundColor: const Color(0xFF0D1117),
-        primaryColor: const Color(0xFF58A6FF),
-        cardColor: const Color(0xFF161B22),
+        scaffoldBackgroundColor: const Color(0xFF0F111A),
+        colorScheme: const ColorScheme.dark(
+          primary: Color(0xFF6C63FF),
+          secondary: Color(0xFF00E5FF),
+        ),
       ),
-      home: const HomeWorkspace(),
+      home: const HomeScreen(),
     );
   }
 }
 
-class HomeWorkspace extends StatefulWidget {
-  const HomeWorkspace({super.key});
+class HomeScreen extends StatefulWidget {
+  const HomeScreen({super.key});
 
   @override
-  State<HomeWorkspace> createState() => _HomeWorkspaceState();
+  State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeWorkspaceState extends State<HomeWorkspace> {
-  int _selectedIndex = 0;
+class _HomeScreenState extends State<HomeScreen> {
+  // Razorpay Key ID (Live key approve hone par sirf yahan replace karna hoga)
+  static const String _razorpayKeyId = 'rzp_test_U2nQWNx9DbaRJ8';
+  // ₹99 + 18% GST = ₹116.82 -> 11682 paise
+  static const int _proAmountInPaise = 11682;
+
+  late Razorpay _razorpay;
   bool _isPro = false;
-  int _daysLeft = 0;
-  String _statusText = "✨ Viral Clip Studio Mobile Ready!";
-  bool _isBusy = false;
+  bool _isProcessing = false;
+  String? _selectedVideoPath;
+  String _statusMessage = 'Koi video select karein edit karne ke liye.';
 
-  String? _shortsVideoPath;
-  String _shortsDuration = "30";
-  final TextEditingController _hookController = TextEditingController();
-
-  String? _beatVideoPath;
-  String? _beatAudioPath;
-  String _beatDuration = "30";
-
-  final TextEditingController _keyController = TextEditingController();
+  final TextEditingController _startSecController = TextEditingController(text: '0');
+  final TextEditingController _endSecController = TextEditingController(text: '15');
+  bool _cropToShorts = true;
 
   @override
   void initState() {
     super.initState();
-    _checkLicense();
+    _loadProStatus();
+    _razorpay = Razorpay();
+    _razorpay.on(Razorpay.EVENT_PAYMENT_SUCCESS, _handlePaymentSuccess);
+    _razorpay.on(Razorpay.EVENT_PAYMENT_ERROR, _handlePaymentError);
+    _razorpay.on(Razorpay.EVENT_EXTERNAL_WALLET, _handleExternalWallet);
   }
 
-  Future<void> _checkLicense() async {
+  @override
+  void dispose() {
+    _razorpay.clear();
+    _startSecController.dispose();
+    _endSecController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadProStatus() async {
     final prefs = await SharedPreferences.getInstance();
-    final bool active = prefs.getBool("pro_active") ?? false;
-    final String? expStr = prefs.getString("expiry_date");
-    if (active && expStr != null) {
-      final expDate = DateTime.tryParse(expStr);
-      if (expDate != null && DateTime.now().isBefore(expDate)) {
-        setState(() {
-          _isPro = true;
-          _daysLeft = expDate.difference(DateTime.now()).inDays + 1;
-        });
-        return;
-      } else {
-        await prefs.setBool("pro_active", false);
-      }
-    }
     setState(() {
-      _isPro = false;
-      _daysLeft = 0;
+      _isPro = prefs.getBool('is_pro_unlocked') ?? false;
     });
   }
 
-  Future<void> _activateKey(String rawKey) async {
-    final clean = rawKey.trim().toUpperCase();
-    if (activeLicenseKeys.contains(clean)) {
-      final prefs = await SharedPreferences.getInstance();
-      final expDate = DateTime.now().add(const Duration(days: planValidityDays));
-      await prefs.setBool("pro_active", true);
-      await prefs.setString("expiry_date", expDate.toIso8601String());
-      await _checkLicense();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("👑 Pro Activated for 30 Days! No Ads & No Watermark.")),
-        );
-      }
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text("❌ Invalid Key! Razorpay payment ke baad mili key dalein.")),
-        );
-      }
-    }
+  Future<void> _unlockPro() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool('is_pro_unlocked', true);
+    setState(() {
+      _isPro = true;
+    });
   }
 
-  Future<Directory> _getExportDir() async {
-    Directory? baseDir = await getExternalStorageDirectory();
-    baseDir ??= await getApplicationDocumentsDirectory();
-    final outDir = Directory("${baseDir.path}/ViralClipStudio");
-    if (!await outDir.exists()) {
-      await outDir.create(recursive: true);
-    }
-    return outDir;
-  }
-
-  void _showExportAdDialog(VoidCallback onProceed) {
-    if (_isPro) {
-      onProceed();
-      return;
-    }
-
-    int secondsLeft = 5;
-    Timer? timer;
-
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) {
-        return StatefulBuilder(
-          builder: (context, setDialogState) {
-            timer ??= Timer.periodic(const Duration(seconds: 1), (t) {
-              if (secondsLeft > 1) {
-                setDialogState(() => secondsLeft--);
-              } else {
-                t.cancel();
-                setDialogState(() => secondsLeft = 0);
-              }
-            });
-
-            return AlertDialog(
-              backgroundColor: const Color(0xFF161B22),
-              title: const Text("📢 Sponsored Ad (Free Mode)", style: TextStyle(fontSize: 16, color: Color(0xFF58A6FF))),
-              content: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const Text(
-                    "Free exports include a small watermark. Upgrade to Pro (₹99) for instant ad-free & watermark-free exports!",
-                    style: TextStyle(fontSize: 13, color: Colors.white70),
-                  ),
-                  const SizedBox(height: 12),
-                  ElevatedButton.icon(
-                    onPressed: () => launchUrl(Uri.parse(adNetworkDirectUrl), mode: LaunchMode.externalApplication),
-                    icon: const Icon(Icons.open_in_browser),
-                    label: const Text("View Sponsor Offer"),
-                  ),
-                ],
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () {
-                    timer?.cancel();
-                    Navigator.pop(ctx);
-                    setState(() => _selectedIndex = 2);
-                  },
-                  child: const Text("👑 Remove Ads (₹99)", style: TextStyle(color: Color(0xFFF2CC60))),
-                ),
-                ElevatedButton(
-                  onPressed: secondsLeft == 0
-                      ? () {
-                          timer?.cancel();
-                          Navigator.pop(ctx);
-                          onProceed();
-                        }
-                      : null,
-                  child: Text(secondsLeft > 0 ? "Wait ${secondsLeft}s..." : "▶ Export Now"),
-                ),
-              ],
-            );
-          },
-        );
+  void _openRazorpayCheckout() {
+    var options = {
+      'key': _razorpayKeyId,
+      'amount': _proAmountInPaise,
+      'currency': 'INR',
+      'name': 'Viral Clip Studio',
+      'description': 'Pro Lifetime Unlock (₹99 + 18% GST)',
+      'retry': {'enabled': true, 'max_count': 1},
+      'prefill': {
+        'contact': '',
+        'email': '',
       },
+      'theme': {
+        'color': '#6C63FF',
+      }
+    };
+
+    try {
+      _razorpay.open(options);
+    } catch (e) {
+      _showSnack('Payment open karne mein error: $e', isError: true);
+    }
+  }
+
+  void _handlePaymentSuccess(PaymentSuccessResponse response) async {
+    await _unlockPro();
+    _showSnack('Payment Successful! Viral Clip Studio Pro Unlock ho gaya 🎉');
+  }
+
+  void _handlePaymentError(PaymentFailureResponse response) {
+    _showSnack(
+      'Payment cancel ya fail ho gaya: ${response.message ?? "Try again"}',
+      isError: true,
     );
   }
 
-  Future<void> _exportViralShort() async {
-    if (_shortsVideoPath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Pehle Gallery se video chunein!")));
-      return;
-    }
-    setState(() {
-      _isBusy = true;
-      _statusText = "✂️ Rendering 9:16 Viral Short...";
-    });
+  void _handleExternalWallet(ExternalWalletResponse response) {
+    _showSnack('External Wallet selected: ${response.walletName}');
+  }
 
-    try {
-      final outDir = await _getExportDir();
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final outPath = "${outDir.path}/Short_$ts.mp4";
-      final int durMs = (int.tryParse(_shortsDuration) ?? 30) * 1000;
-
-      final editor = VideoEditorBuilder(videoPath: _shortsVideoPath!)
-          .trim(startTimeMs: 0, endTimeMs: durMs)
-          .crop(aspectRatio: VideoAspectRatio.ratio9x16);
-
-      final resultPath = await editor.export(outputPath: outPath);
-
-      if (resultPath != null) {
-        setState(() => _statusText = "✅ Saved: $resultPath");
-      } else {
-        setState(() => _statusText = "❌ Render failed. Doosri video try karein.");
-      }
-    } catch (e) {
-      setState(() => _statusText = "❌ Error: $e");
-    } finally {
-      setState(() => _isBusy = false);
+  Future<void> _pickVideo() async {
+    final result = await FilePicker.platform.pickFiles(type: FileType.video);
+    if (result != null && result.files.single.path != null) {
+      setState(() {
+        _selectedVideoPath = result.files.single.path;
+        _statusMessage = 'Video selected: ${result.files.single.name}';
+      });
     }
   }
 
-  Future<void> _exportBeatSync() async {
-    if (_beatVideoPath == null || _beatAudioPath == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Video aur Song dono chunein!")));
+  Future<void> _exportAndSaveToGallery() async {
+    if (_selectedVideoPath == null) {
+      _showSnack('Pehle koi video select karein!', isError: true);
       return;
     }
+
+    final startSec = int.tryParse(_startSecController.text.trim()) ?? 0;
+    final endSec = int.tryParse(_endSecController.text.trim()) ?? 15;
+
+    if (endSec <= startSec) {
+      _showSnack('End time, Start time se zyada hona chahiye!', isError: true);
+      return;
+    }
+
+    // Free users ke liye 15 sec limit, Pro ke liye unlimited
+    if (!_isPro && (endSec - startSec) > 15) {
+      _showSnack(
+        'Free version mein max 15 sec clip ban sakti hai. Pro unlock karein!',
+        isError: true,
+      );
+      _openRazorpayCheckout();
+      return;
+    }
+
     setState(() {
-      _isBusy = true;
-      _statusText = "🔥 Syncing video with song beats...";
+      _isProcessing = true;
+      _statusMessage = 'Video process ho raha hai...';
     });
 
     try {
-      final outDir = await _getExportDir();
-      final ts = DateTime.now().millisecondsSinceEpoch;
-      final outPath = "${outDir.path}/BeatSync_$ts.mp4";
-      final int durMs = (int.tryParse(_beatDuration) ?? 30) * 1000;
+      // Gallery permission request
+      final hasAccess = await Gal.hasAccess(toAlbum: true);
+      if (!hasAccess) {
+        await Gal.requestAccess(toAlbum: true);
+      }
 
-      final editor = VideoEditorBuilder(videoPath: _beatVideoPath!)
-    .trim(startTimeMs: 0, endTimeMs: durMs)
-    .crop(aspectRatio: VideoAspectRatio.ratio9x16)
-    .removeAudio();
-      final resultPath = await editor.export(outputPath: outPath);
+      var editor = VideoEditorBuilder(videoPath: _selectedVideoPath!)
+          .trim(startTimeMs: startSec * 1000, endTimeMs: endSec * 1000);
 
-      if (resultPath != null) {
-        setState(() => _statusText = "✅ Beat-Sync Saved: $resultPath");
+      if (_cropToShorts) {
+        editor = editor.crop(aspectRatio: VideoAspectRatio.ratio9x16);
+      }
+
+      final outputPath = await editor.export();
+
+      if (outputPath != null) {
+        // Seedha phone ki Gallery -> "Viral Clip Studio" album mein save karega
+        await Gal.putVideo(outputPath, album: 'Viral Clip Studio');
+        setState(() {
+          _statusMessage = 'Saved to Gallery -> Viral Clip Studio ✅';
+        });
+        _showSnack('Video Gallery mein "Viral Clip Studio" album mein save ho gaya! 🎬');
       } else {
-        setState(() => _statusText = "❌ Beat-Sync error.");
+        setState(() {
+          _statusMessage = 'Export fail ho gaya.';
+        });
+        _showSnack('Video export nahi ho paya.', isError: true);
       }
     } catch (e) {
-      setState(() => _statusText = "❌ Error: $e");
+      setState(() {
+        _statusMessage = 'Error: $e';
+      });
+      _showSnack('Error aaya: $e', isError: true);
     } finally {
-      setState(() => _isBusy = false);
+      setState(() {
+        _isProcessing = false;
+      });
     }
+  }
+
+  void _showSnack(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(msg),
+        backgroundColor: isError ? Colors.redAccent : Colors.green,
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final pages = [
-      _buildShortsTab(),
-      _buildBeatSyncTab(),
-      _buildProTab(),
-    ];
-
     return Scaffold(
       appBar: AppBar(
-        backgroundColor: const Color(0xFF161B22),
-        title: Row(
-          children: [
-            const Text("VIRAL CLIP STUDIO", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 17, color: Color(0xFF58A6FF))),
-            const Spacer(),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-              decoration: BoxDecoration(
-                color: _isPro ? const Color(0xFF3B2E00) : const Color(0xFF122D1B),
-                borderRadius: BorderRadius.circular(12),
-              ),
-              child: Text(
-                _isPro ? "👑 PRO (${_daysLeft}d)" : "FREE PLAN",
-                style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: _isPro ? const Color(0xFFF2CC60) : const Color(0xFF3FB950)),
-              ),
-            ),
-          ],
-        ),
+        title: const Text('Viral Clip Studio'),
+        backgroundColor: const Color(0xFF1A1D2B),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            child: _isPro
+                ? const Chip(
+                    label: Text('PRO', style: TextStyle(fontWeight: FontWeight.bold)),
+                    backgroundColor: Colors.amber,
+                    labelStyle: TextStyle(color: Colors.black),
+                  )
+                : ElevatedButton.icon(
+                    onPressed: _openRazorpayCheckout,
+                    icon: const Icon(Icons.star, size: 16),
+                    label: const Text('Go Pro ₹116.82'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.amber,
+                      foregroundColor: Colors.black,
+                    ),
+                  ),
+          ),
+        ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
+      body: SingleChildScrollView(
+        padding: const EdgeInsets.all(20),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            Expanded(child: pages[_selectedIndex]),
             Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
+              padding: const EdgeInsets.all(16),
               decoration: BoxDecoration(
-                color: const Color(0xFF161B22),
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: const Color(0xFF30363D)),
+                color: const Color(0xFF1A1D2B),
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white12),
               ),
               child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(_statusText, style: const TextStyle(fontSize: 12, color: Color(0xFF3FB950), fontWeight: FontWeight.w600)),
-                  if (_isBusy) ...[
-                    const SizedBox(height: 8),
-                    const LinearProgressIndicator(color: Color(0xFF58A6FF)),
-                  ],
+                  const Icon(Icons.video_library, size: 48, color: Color(0xFF6C63FF)),
+                  const SizedBox(height: 10),
+                  Text(
+                    _statusMessage,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(color: Colors.white70),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton.icon(
+                    onPressed: _isProcessing ? null : _pickVideo,
+                    icon: const Icon(Icons.folder_open),
+                    label: const Text('Select Video'),
+                    style: ElevatedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                    ),
+                  ),
                 ],
               ),
             ),
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _startSecController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'Start (Seconds)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: TextField(
+                    controller: _endSecController,
+                    keyboardType: TextInputType.number,
+                    decoration: const InputDecoration(
+                      labelText: 'End (Seconds)',
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            SwitchListTile(
+              title: const Text('9:16 Shorts / Reels Crop'),
+              subtitle: const Text('YouTube Shorts & Instagram Reels ke liye'),
+              value: _cropToShorts,
+              onChanged: (val) => setState(() => _cropToShorts = val),
+            ),
+            const SizedBox(height: 20),
+            ElevatedButton.icon(
+              onPressed: _isProcessing ? null : _exportAndSaveToGallery,
+              icon: _isProcessing
+                  ? const SizedBox(
+                      width: 20,
+                      height: 20,
+                      child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                    )
+                  : const Icon(Icons.save_alt),
+              label: Text(
+                _isProcessing ? 'Exporting to Gallery...' : 'Export & Save to Gallery',
+                style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: const Color(0xFF6C63FF),
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+              ),
+            ),
+            const SizedBox(height: 24),
+            if (!_isPro)
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.amber.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: Colors.amber),
+                ),
+                child: Column(
+                  children: [
+                    const Text(
+                      'Unlock Viral Clip Studio Pro',
+                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold, color: Colors.amber),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      '₹99 + 18% GST = ₹116.82 (One-Time)\nUnlimited Clip Length • Instant Auto-Unlock',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(color: Colors.white70),
+                    ),
+                    const SizedBox(height: 12),
+                    ElevatedButton(
+                      onPressed: _openRazorpayCheckout,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.amber,
+                        foregroundColor: Colors.black,
+                      ),
+                      child: const Text('Pay ₹116.82 & Unlock Pro'),
+                    ),
+                  ],
+                ),
+              ),
           ],
         ),
       ),
-      bottomNavigationBar: BottomNavigationBar(
-        backgroundColor: const Color(0xFF161B22),
-        selectedItemColor: const Color(0xFF58A6FF),
-        unselectedItemColor: Colors.white60,
-        currentIndex: _selectedIndex,
-        onTap: (idx) => setState(() => _selectedIndex = idx),
-        items: const [
-          BottomNavigationBarItem(icon: Icon(Icons.movie_creation), label: "Shorts (9:16)"),
-          BottomNavigationBarItem(icon: Icon(Icons.music_note), label: "Beat-Sync"),
-          BottomNavigationBarItem(icon: Icon(Icons.workspace_premium), label: "Pro Pass"),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildShortsTab() {
-    return ListView(
-      children: [
-        const Text("🎬 Viral Shorts Auto-Clipper", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 6),
-        const Text("Apni video ko 9:16 vertical Shorts me convert karein.", style: TextStyle(color: Colors.white60, fontSize: 13)),
-        const SizedBox(height: 16),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48), backgroundColor: const Color(0xFF21262D)),
-          onPressed: () async {
-            final res = await FilePicker.platform.pickFiles(type: FileType.video);
-            if (res != null && res.files.single.path != null) {
-              setState(() => _shortsVideoPath = res.files.single.path);
-            }
-          },
-          icon: const Icon(Icons.video_library),
-          label: Text(_shortsVideoPath == null ? "📂 Gallery se Video Chunein" : "✅ Selected: ${_shortsVideoPath!.split('/').last}"),
-        ),
-        const SizedBox(height: 14),
-        TextField(
-          controller: _hookController,
-          decoration: const InputDecoration(
-            labelText: "Viral Hook Title / Note",
-            border: OutlineInputBorder(),
-          ),
-        ),
-        const SizedBox(height: 14),
-        DropdownButtonFormField<String>(
-          value: _shortsDuration,
-          decoration: const InputDecoration(labelText: "Clip Duration (Seconds)", border: OutlineInputBorder()),
-          items: ["15", "30", "45", "60"].map((e) => DropdownMenuItem(value: e, child: Text("$e Seconds"))).toList(),
-          onChanged: (v) => setState(() => _shortsDuration = v ?? "30"),
-        ),
-        const SizedBox(height: 20),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50), backgroundColor: const Color(0xFF238636)),
-          onPressed: _isBusy ? null : () => _showExportAdDialog(_exportViralShort),
-          child: const Text("⚡ Generate Viral Short Now", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildBeatSyncTab() {
-    return ListView(
-      children: [
-        const Text("🎵 Beat-Sync Montage Editor", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 6),
-        const Text("Gameplay ya vlog video par trending song sync karke 9:16 montage banayein.", style: TextStyle(color: Colors.white60, fontSize: 13)),
-        const SizedBox(height: 16),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48), backgroundColor: const Color(0xFF21262D)),
-          onPressed: () async {
-            final res = await FilePicker.platform.pickFiles(type: FileType.video);
-            if (res != null && res.files.single.path != null) {
-              setState(() => _beatVideoPath = res.files.single.path);
-            }
-          },
-          icon: const Icon(Icons.videocam),
-          label: Text(_beatVideoPath == null ? "🎬 Video File Chunein" : "✅ Video: ${_beatVideoPath!.split('/').last}"),
-        ),
-        const SizedBox(height: 12),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(48), backgroundColor: const Color(0xFF21262D)),
-          onPressed: () async {
-            final res = await FilePicker.platform.pickFiles(type: FileType.audio);
-            if (res != null && res.files.single.path != null) {
-              setState(() => _beatAudioPath = res.files.single.path);
-            }
-          },
-          icon: const Icon(Icons.audiotrack),
-          label: Text(_beatAudioPath == null ? "🎶 MP3 / Song File Chunein" : "✅ Song: ${_beatAudioPath!.split('/').last}"),
-        ),
-        const SizedBox(height: 14),
-        DropdownButtonFormField<String>(
-          value: _beatDuration,
-          decoration: const InputDecoration(labelText: "Montage Length", border: OutlineInputBorder()),
-          items: ["15", "30", "45", "60"].map((e) => DropdownMenuItem(value: e, child: Text("$e Seconds"))).toList(),
-          onChanged: (v) => setState(() => _beatDuration = v ?? "30"),
-        ),
-        const SizedBox(height: 20),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(50), backgroundColor: const Color(0xFF8957E5)),
-          onPressed: _isBusy ? null : () => _showExportAdDialog(_exportBeatSync),
-          child: const Text("🔥 Create Beat-Synced Video", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Colors.white)),
-        ),
-      ],
-    );
-  }
-
-  Widget _buildProTab() {
-    return ListView(
-      children: [
-        const Text("👑 Viral Clip Studio Pro (30 Days)", style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFFF2CC60))),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFF161B22),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFFF2CC60)),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text("✔ 100% Watermark-Free HD Exports (30 Days)\n✔ Zero Box Ads (Instant Export)\n✔ Same Key works on PC & Android", style: TextStyle(height: 1.5)),
-              const Divider(height: 20),
-              const Text("Price: ₹99 / 30 Days", style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: Color(0xFF3FB950))),
-              const SizedBox(height: 12),
-              ElevatedButton(
-                style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(46), backgroundColor: const Color(0xFF1F6FEB)),
-                onPressed: () => launchUrl(Uri.parse(razorpayPaymentUrl), mode: LaunchMode.externalApplication),
-                child: const Text("💳 Pay ₹99 via Razorpay (UPI / Card)", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 18),
-        const Text("Payment ke baad mila License Key dalein:", style: TextStyle(fontWeight: FontWeight.bold)),
-        const SizedBox(height: 8),
-        TextField(
-          controller: _keyController,
-          decoration: const InputDecoration(hintText: "e.g. VCS-NOV26-PRO", border: OutlineInputBorder()),
-        ),
-        const SizedBox(height: 10),
-        ElevatedButton(
-          style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(46), backgroundColor: const Color(0xFF238636)),
-          onPressed: () => _activateKey(_keyController.text),
-          child: const Text("Activate 30-Day Pro Pass", style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white)),
-        ),
-      ],
     );
   }
 }
