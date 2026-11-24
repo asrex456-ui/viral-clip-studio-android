@@ -1,7 +1,7 @@
 name: viral_clip_studio
 description: "Viral Clip Studio - Create, Edit & Share"
 publish_to: 'none'
-version: 1.0.0+1
+version: 2.0.0+2
 
 environment:
   sdk: '>=3.2.0 <4.0.0'
@@ -12,6 +12,9 @@ dependencies:
   cupertino_icons: ^1.0.8
   file_picker: ^8.1.2
   easy_video_editor: ^0.1.3
+  ffmpeg_kit_flutter_new_min_gpl: ^3.0.0
+  path_provider: ^2.1.6
+  audioplayers: ^6.8.1
   gal: ^2.3.0
   video_player: ^2.9.2
   share_plus: ^10.1.2
