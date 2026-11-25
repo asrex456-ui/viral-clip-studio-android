@@ -1,8 +1,8 @@
 import 'dart:async';
 import 'dart:io';
 
-import 'package:ffmpeg_kit_flutter/ffmpeg_kit.dart';
-import 'package:ffmpeg_kit_flutter/return_code.dart';
+import 'package:ffmpeg_kit_flutter_new/ffmpeg_kit.dart';
+import 'package:ffmpeg_kit_flutter_new/return_code.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -53,7 +53,6 @@ class ViralClipStudioApp extends StatelessWidget {
           foregroundColor: Colors.white,
           elevation: 0,
         ),
-        // FIX: Sabhi ElevatedButton par white text guarantee (koi blank button nahi)
         elevatedButtonTheme: ElevatedButtonThemeData(
           style: ElevatedButton.styleFrom(
             backgroundColor: AppColors.purple,
@@ -129,7 +128,8 @@ class StudioStorage {
 
   static Future<String?> mirrorToDownloads(String sourcePath) async {
     try {
-      final downloadsDir = Directory('/storage/emulated/0/Download/ViralClipStudio');
+      final downloadsDir =
+          Directory('/storage/emulated/0/Download/ViralClipStudio');
       if (!await downloadsDir.exists()) {
         await downloadsDir.create(recursive: true);
       }
@@ -246,8 +246,8 @@ class _HomeShellState extends State<HomeShell> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Row(
-          children: const [
+        title: const Row(
+          children: [
             Text(
               'Viral Clip ',
               style: TextStyle(
@@ -275,9 +275,9 @@ class _HomeShellState extends State<HomeShell> {
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: AppColors.green),
             ),
-            child: Row(
+            child: const Row(
               mainAxisSize: MainAxisSize.min,
-              children: const [
+              children: [
                 Icon(Icons.science, size: 14, color: AppColors.green),
                 SizedBox(width: 5),
                 Text(
@@ -643,8 +643,8 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
   double _totalSeconds = 60;
   RangeValues _clipRange = const RangeValues(0, 30);
 
-  String _clipMode = '30s'; // 30s, 60s, custom, full
-  String _aspectMode = '9:16_crop'; // 9:16_crop, 9:16_blur, original
+  String _clipMode = '30s';
+  String _aspectMode = '9:16_crop';
 
   @override
   void dispose() {
@@ -766,36 +766,35 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
       await sink.close();
 
       final outputPath = await StudioStorage.newOutputPath('yt_clip');
-      final isFullOriginal =
-          _clipMode == 'full' && _aspectMode == 'original';
+      final isFullOriginal = _clipMode == 'full' && _aspectMode == 'original';
 
       if (isFullOriginal) {
         if (mounted) {
-          setState(() => _statusText = 'Step 2/2: Full video save ho raha hai...');
+          setState(
+              () => _statusText = 'Step 2/2: Full video save ho raha hai...');
         }
         await tempFile.copy(outputPath);
       } else {
         if (mounted) {
-          setState(() => _statusText = 'Step 2/2: Viral clip cut & render ho raha hai...');
+          setState(() =>
+              _statusText = 'Step 2/2: Viral clip cut & render ho raha hai...');
         }
 
         final startSec = _clipRange.start.toStringAsFixed(1);
-        final durationSec =
-            (_clipRange.end - _clipRange.start).clamp(1.0, _totalSeconds).toStringAsFixed(1);
+        final durationSec = (_clipRange.end - _clipRange.start)
+            .clamp(1.0, _totalSeconds)
+            .toStringAsFixed(1);
 
         String cmd;
         if (_aspectMode == 'original') {
           cmd =
               '-y -ss $startSec -i "${tempFile.path}" -t $durationSec -c copy "$outputPath"';
         } else if (_aspectMode == '9:16_crop') {
-          cmd =
-              '-y -ss $startSec -i "${tempFile.path}" -t $durationSec '
+          cmd = '-y -ss $startSec -i "${tempFile.path}" -t $durationSec '
               '-vf "crop=ih*9/16:ih,scale=720:1280" '
               '-c:v mpeg4 -q:v 3 -c:a aac "$outputPath"';
         } else {
-          // 9:16 Blur Background
-          cmd =
-              '-y -ss $startSec -i "${tempFile.path}" -t $durationSec '
+          cmd = '-y -ss $startSec -i "${tempFile.path}" -t $durationSec '
               '-filter_complex "[0:v]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:5[bg];'
               '[0:v]scale=720:1280:force_original_aspect_ratio=decrease[fg];[bg][fg]overlay=(W-w)/2:(H-h)/2" '
               '-c:v mpeg4 -q:v 3 -c:a aac "$outputPath"';
@@ -804,7 +803,6 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
         final session = await FFmpegKit.execute(cmd);
         final rc = await session.getReturnCode();
         if (!ReturnCode.isSuccess(rc)) {
-          // Safe fallback re-encode without stream copy
           final fallbackCmd =
               '-y -ss $startSec -i "${tempFile.path}" -t $durationSec -c:v mpeg4 -q:v 4 -c:a aac "$outputPath"';
           final fbSession = await FFmpegKit.execute(fallbackCmd);
@@ -885,11 +883,11 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
                           strokeWidth: 2, color: Colors.white),
                     )
                   : const Icon(Icons.search),
-              label: Text(
-                  _loadingInfo ? 'Video Check Ho Raha Hai...' : 'Load YouTube Video'),
+              label: Text(_loadingInfo
+                  ? 'Video Check Ho Raha Hai...'
+                  : 'Load YouTube Video'),
             ),
           ),
-
           if (_video != null) ...[
             const SizedBox(height: 20),
             Container(
@@ -939,8 +937,6 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
               ),
             ),
             const SizedBox(height: 18),
-
-            // Clip Mode Chips
             const Text(
               '1. Clip Length Chuno',
               style:
@@ -961,7 +957,6 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
                     () => _applyClipPreset('full')),
               ],
             ),
-
             if (_clipMode != 'full') ...[
               const SizedBox(height: 14),
               Row(
@@ -1000,7 +995,6 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
                 },
               ),
             ],
-
             const SizedBox(height: 16),
             const Text(
               '2. Format / Ratio Chuno',
@@ -1020,7 +1014,6 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
                     () => setState(() => _aspectMode = 'original')),
               ],
             ),
-
             const SizedBox(height: 22),
             if (_processing) ...[
               LinearProgressIndicator(
@@ -1040,7 +1033,6 @@ class _YoutubeClipperScreenState extends State<YoutubeClipperScreen> {
               ),
               const SizedBox(height: 14),
             ],
-
             SizedBox(
               width: double.infinity,
               child: ElevatedButton.icon(
@@ -1211,7 +1203,8 @@ class _ViceGamingScreenState extends State<ViceGamingScreen> {
                         strokeWidth: 2, color: Colors.white),
                   )
                 : const Icon(Icons.bolt),
-            label: Text(_processing ? 'Rendering Gaming Clip...' : 'Export Vice Clip'),
+            label: Text(
+                _processing ? 'Rendering Gaming Clip...' : 'Export Vice Clip'),
           ),
         ],
       ),
@@ -1345,7 +1338,8 @@ class _AutoSplitScreenState extends State<AutoSplitScreen> {
                         strokeWidth: 2, color: Colors.white),
                   )
                 : const Icon(Icons.content_cut),
-            label: Text(_processing ? 'Splitting Video...' : 'Start Auto-Split'),
+            label:
+                Text(_processing ? 'Splitting Video...' : 'Start Auto-Split'),
           ),
         ],
       ),
@@ -1584,7 +1578,8 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
       } else if (_ratio == '1:1') {
         vFilters.add('crop=min(iw\\,ih):min(iw\\,ih),scale=720:720');
       } else if (_ratio == '16:9') {
-        vFilters.add('scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2');
+        vFilters.add(
+            'scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2');
       }
 
       final fx = _effectFilter(_effect);
@@ -1652,8 +1647,6 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
                 style: const TextStyle(color: AppColors.cyan)),
           ],
           const SizedBox(height: 16),
-
-          // Trim Inputs
           const Text('Trim (Seconds mein — khali chhodo poori video ke liye):',
               style: TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
@@ -1677,8 +1670,6 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
             ],
           ),
           const SizedBox(height: 16),
-
-          // Ratio
           const Text('Aspect Ratio:',
               style: TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
@@ -1696,8 +1687,6 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
             }).toList(),
           ),
           const SizedBox(height: 16),
-
-          // Speed
           const Text('Speed Control:',
               style: TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
@@ -1715,8 +1704,6 @@ class _ProEditorScreenState extends State<ProEditorScreen> {
             }).toList(),
           ),
           const SizedBox(height: 16),
-
-          // Color Effects
           const Text('Color Grading & Effects:',
               style: TextStyle(fontWeight: FontWeight.w700)),
           const SizedBox(height: 8),
@@ -1922,7 +1909,8 @@ class _MultiMergeScreenState extends State<MultiMergeScreen> {
                         strokeWidth: 2, color: Colors.white),
                   )
                 : const Icon(Icons.merge_type),
-            label: Text(_processing ? 'Merging...' : 'Merge ${_paths.length} Clips'),
+            label: Text(
+                _processing ? 'Merging...' : 'Merge ${_paths.length} Clips'),
           ),
         ],
       ),
@@ -1971,8 +1959,7 @@ class _PhotoReelsScreenState extends State<PhotoReelsScreen> {
       for (int i = 0; i < _images.length; i++) {
         final p =
             '${tempDir.path}/pclip_${DateTime.now().millisecondsSinceEpoch}_$i.mp4';
-        final cmd =
-            '-y -loop 1 -t $_secPerPhoto -i "${_images[i]}" '
+        final cmd = '-y -loop 1 -t $_secPerPhoto -i "${_images[i]}" '
             '-vf "scale=720:1280:force_original_aspect_ratio=decrease,'
             'pad=720:1280:(ow-iw)/2:(oh-ih)/2,format=yuv420p" '
             '-r 25 -c:v mpeg4 -q:v 3 "$p"';
@@ -2177,7 +2164,6 @@ class _ProjectsTabState extends State<ProjectsTab> {
                                 ),
                               ),
                               const SizedBox(height: 18),
-                              // FIXED: Clear visible white text on purple button
                               ElevatedButton.icon(
                                 style: ElevatedButton.styleFrom(
                                   backgroundColor: AppColors.purple,
@@ -2215,8 +2201,8 @@ class _ProjectsTabState extends State<ProjectsTab> {
                             decoration: BoxDecoration(
                               color: AppColors.surface,
                               borderRadius: BorderRadius.circular(14),
-                              border: Border.all(
-                                  color: AppColors.surfaceLight),
+                              border:
+                                  Border.all(color: AppColors.surfaceLight),
                             ),
                             child: Row(
                               children: [
@@ -2264,8 +2250,8 @@ class _ProjectsTabState extends State<ProjectsTab> {
                                 IconButton(
                                   icon: const Icon(Icons.share,
                                       color: AppColors.green),
-                                  onPressed: () => Share.shareXFiles(
-                                      [XFile(file.path)]),
+                                  onPressed: () =>
+                                      Share.shareXFiles([XFile(file.path)]),
                                 ),
                                 IconButton(
                                   icon: const Icon(Icons.delete_outline,
