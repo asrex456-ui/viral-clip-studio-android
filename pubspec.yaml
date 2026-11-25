@@ -10,7 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   cupertino_icons: ^1.0.8
-  ffmpeg_kit_flutter: ^6.0.3
+  ffmpeg_kit_flutter_new:
   youtube_explode_dart: ^2.3.6
   file_picker: ^8.1.2
   path_provider: ^2.1.4
