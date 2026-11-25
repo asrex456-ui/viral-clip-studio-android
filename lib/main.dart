@@ -5,10 +5,10 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:easy_video_editor/easy_video_editor.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffmpeg_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/ffprobe_kit.dart';
 import 'package:ffmpeg_kit_flutter_new_min_gpl/return_code.dart';
+import 'package:google_mlkit_face_detection/google_mlkit_face_detection.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:gal/gal.dart';
@@ -28,10 +28,11 @@ class AppColors {
   static const neonPink = Color(0xFFE02BFF);
   static const neonBlue = Color(0xFF00B4FF);
   static const neonCyan = Color(0xFF00F0FF);
+  static const viceOrange = Color(0xFFFF6B35);
 }
 
 // ============================================================================
-// PREMIUM VIDEO EFFECTS PRESETS (Live Preview Matrix + Exact FFmpeg Filter)
+// PREMIUM VIDEO EFFECTS PRESETS (14 Presets incl. Vice Neon & Miami Sunset)
 // ============================================================================
 class VideoEffectPreset {
   final String id;
@@ -71,6 +72,36 @@ const List<VideoEffectPreset> kStudioEffects = [
     icon: Icons.block_rounded,
     ffmpegFilter: '',
     previewMatrix: _identityMatrix,
+  ),
+  VideoEffectPreset(
+    id: 'vice_neon',
+    name: 'Vice Neon',
+    category: 'Gaming',
+    accent: Color(0xFFFF2E93),
+    icon: Icons.sports_esports_rounded,
+    ffmpegFilter:
+        'colorbalance=rs=0.10:gs=-0.04:bs=0.16:rh=0.16:gh=-0.02:bh=0.14,eq=contrast=1.24:saturation=1.55:brightness=0.03,unsharp=5:5:0.9',
+    previewMatrix: [
+      1.32, 0, 0.14, 0, 10,
+      0, 1.02, 0.08, 0, 0,
+      0.14, 0.06, 1.36, 0, 14,
+      0, 0, 0, 1, 0,
+    ],
+  ),
+  VideoEffectPreset(
+    id: 'miami_sunset',
+    name: 'Miami Sunset',
+    category: 'Gaming',
+    accent: Color(0xFFFF6B35),
+    icon: Icons.wb_twilight_rounded,
+    ffmpegFilter:
+        'colorbalance=rs=-0.06:gs=0.02:bs=0.14:rh=0.22:gh=0.08:bh=-0.06,eq=contrast=1.20:saturation=1.45:brightness=0.04,unsharp=5:5:0.8',
+    previewMatrix: [
+      1.34, 0.08, 0, 0, 14,
+      0.04, 1.08, 0.02, 0, 6,
+      0, 0.04, 1.12, 0, 6,
+      0, 0, 0, 1, 0,
+    ],
   ),
   VideoEffectPreset(
     id: 'neon_glow',
@@ -218,7 +249,7 @@ const List<VideoEffectPreset> kStudioEffects = [
   VideoEffectPreset(
     id: 'hdr_vivid',
     name: 'HDR Vivid',
-    category: 'Trending',
+    category: 'Gaming',
     accent: Color(0xFF10B981),
     icon: Icons.hd_rounded,
     ffmpegFilter: 'eq=contrast=1.22:saturation=1.48:brightness=0.03,unsharp=5:5:1.0',
@@ -361,7 +392,7 @@ const List<TransitionPreset> kStudioTransitions = [
 ];
 
 // ============================================================================
-// BUILT-IN COPYRIGHT-FREE STUDIO MUSIC PACKS (Offline On-Demand Generator)
+// BUILT-IN COPYRIGHT-FREE STUDIO MUSIC PACKS & GAMING SFX
 // ============================================================================
 class BuiltInMusicTrack {
   final String id;
@@ -369,8 +400,8 @@ class BuiltInMusicTrack {
   final String mood;
   final int bpm;
   final Color color;
-  final List<List<int>> chords; // 4 chords in MIDI notes
-  final List<int> melody; // 16-step pattern (0 = rest)
+  final List<List<int>> chords;
+  final List<int> melody;
   final bool hasKick;
   final bool hasHat;
   final bool brightSynth;
@@ -528,6 +559,29 @@ const List<BuiltInMusicTrack> kBuiltInMusicTracks = [
   ),
 ];
 
+Uint8List _encodeMonoWav(Int16List pcm, int sampleRate) {
+  final int dataBytes = pcm.length * 2;
+  final ByteData header = ByteData(44);
+  header.setUint32(0, 0x52494646, Endian.big);
+  header.setUint32(4, 36 + dataBytes, Endian.little);
+  header.setUint32(8, 0x57415645, Endian.big);
+  header.setUint32(12, 0x666d7420, Endian.big);
+  header.setUint32(16, 16, Endian.little);
+  header.setUint16(20, 1, Endian.little);
+  header.setUint16(22, 1, Endian.little);
+  header.setUint32(24, sampleRate, Endian.little);
+  header.setUint32(28, sampleRate * 2, Endian.little);
+  header.setUint16(32, 2, Endian.little);
+  header.setUint16(34, 16, Endian.little);
+  header.setUint32(36, 0x64617461, Endian.big);
+  header.setUint32(40, dataBytes, Endian.little);
+
+  final Uint8List out = Uint8List(44 + dataBytes);
+  out.setRange(0, 44, header.buffer.asUint8List());
+  out.setRange(44, 44 + dataBytes, pcm.buffer.asUint8List());
+  return out;
+}
+
 class StudioMusicPackManager {
   static Future<Directory> _packDir() async {
     final docs = await getApplicationDocumentsDirectory();
@@ -564,12 +618,11 @@ class StudioMusicPackManager {
     return 440.0 * math.pow(2.0, (midi - 69) / 12.0).toDouble();
   }
 
-  // Synthesizes a clean, warm, seamless 4-bar musical WAV loop locally
   static Uint8List _synthesizeStudioLoop(BuiltInMusicTrack track) {
     const int sampleRate = 22050;
     final double beatSec = 60.0 / track.bpm;
     final double barSec = beatSec * 4.0;
-    final double totalSec = barSec * 4.0; // 4 full bars = seamless loop
+    final double totalSec = barSec * 4.0;
     final int numSamples = (totalSec * sampleRate).round();
 
     final Int16List pcm = Int16List(numSamples);
@@ -584,18 +637,17 @@ class StudioMusicPackManager {
 
       double sample = 0.0;
 
-      // 1. Warm Chord Pad + Soft Sub Bass
       final chord = track.chords[barIdx];
       final double padEnv =
           math.min(1.0, barLocalT / 0.12) * math.min(1.0, (barSec - barLocalT) / 0.15 + 0.35);
       for (int c = 0; c < chord.length; c++) {
         final hz = _midiToHz(chord[c]);
         final phase = 2.0 * math.pi * hz * t;
-        final tone = math.sin(phase) + (track.brightSynth ? 0.28 * math.sin(phase * 2.0) : 0.15 * math.sin(phase * 2.0));
+        final tone = math.sin(phase) +
+            (track.brightSynth ? 0.28 * math.sin(phase * 2.0) : 0.15 * math.sin(phase * 2.0));
         sample += tone * (c == 0 ? 0.16 : 0.085) * padEnv;
       }
 
-      // 2. Melodic Pluck / Keys Arpeggio (16 steps across 4 bars)
       final int stepIdx = ((t / (barSec / 4.0)).floor()) % track.melody.length;
       final int melMidi = track.melody[stepIdx];
       if (melMidi > 0) {
@@ -609,14 +661,12 @@ class StudioMusicPackManager {
         sample += melWave * 0.20 * attack * decay;
       }
 
-      // 3. Punchy Kick Drum on beats
       if (track.hasKick) {
         final double kickEnv = math.exp(-beatLocalT * 16.0);
         final double kickFreq = 46.0 + 88.0 * math.exp(-beatLocalT * 30.0);
         sample += math.sin(2.0 * math.pi * kickFreq * beatLocalT) * 0.36 * kickEnv;
       }
 
-      // 4. Crisp Off-beat Hi-Hat
       if (track.hasHat) {
         final double halfBeat = beatSec * 0.5;
         final double hatLocalT = t % halfBeat;
@@ -626,53 +676,298 @@ class StudioMusicPackManager {
         }
       }
 
-      // Seamless loop edge fade (prevent clicks on loop wrap)
       double edgeGain = 1.0;
       if (i < 400) edgeGain = i / 400.0;
       if (i > numSamples - 400) edgeGain = (numSamples - i) / 400.0;
 
-      // Soft warm limiter
       final double limited = sample / (1.0 + sample.abs() * 0.55);
       pcm[i] = (limited * edgeGain * 29000.0).round().clamp(-32767, 32767);
     }
 
-    // Build 44-byte WAV header + PCM payload
-    final int dataBytes = pcm.length * 2;
-    final ByteData header = ByteData(44);
-    header.setUint32(0, 0x52494646, Endian.big); // "RIFF"
-    header.setUint32(4, 36 + dataBytes, Endian.little);
-    header.setUint32(8, 0x57415645, Endian.big); // "WAVE"
-    header.setUint32(12, 0x666d7420, Endian.big); // "fmt "
-    header.setUint32(16, 16, Endian.little);
-    header.setUint16(20, 1, Endian.little); // PCM
-    header.setUint16(22, 1, Endian.little); // Mono
-    header.setUint32(24, sampleRate, Endian.little);
-    header.setUint32(28, sampleRate * 2, Endian.little);
-    header.setUint16(32, 2, Endian.little);
-    header.setUint16(34, 16, Endian.little);
-    header.setUint32(36, 0x64617461, Endian.big); // "data"
-    header.setUint32(40, dataBytes, Endian.little);
-
-    final Uint8List out = Uint8List(44 + dataBytes);
-    out.setRange(0, 44, header.buffer.asUint8List());
-    out.setRange(44, 44 + dataBytes, pcm.buffer.asUint8List());
-    return out;
+    return _encodeMonoWav(pcm, sampleRate);
   }
 }
 
-Future<bool> checkVideoHasAudio(String videoPath) async {
+// Synthesizes Dramatic Gaming Freeze SFX (Bass Drop / Mission Clear Fanfare)
+class StudioGamingSfxGenerator {
+  static Future<String> generateFreezeSfx({required bool isFailStyle}) async {
+    const int sampleRate = 22050;
+    const double durSec = 3.0;
+    final int numSamples = (durSec * sampleRate).round();
+    final Int16List pcm = Int16List(numSamples);
+
+    if (isFailStyle) {
+      // Deep dramatic sub-bass drop + dark tension drone
+      double phase = 0.0;
+      for (int i = 0; i < numSamples; i++) {
+        final double t = i / sampleRate;
+        final double freq = 38.0 + 115.0 * math.exp(-t * 3.8);
+        phase += 2.0 * math.pi * freq / sampleRate;
+        final double boom = math.sin(phase) * math.exp(-t * 0.75) * 0.75;
+        final double impact = math.sin(2.0 * math.pi * 220.0 * t) * math.exp(-t * 14.0) * 0.30;
+        final double drone = (math.sin(2.0 * math.pi * 55.0 * t) + 0.5 * math.sin(2.0 * math.pi * 82.4 * t)) *
+            math.min(1.0, t / 0.25) *
+            math.exp(-t * 0.6) *
+            0.22;
+        final double fadeOut = t > 2.4 ? ((3.0 - t) / 0.6).clamp(0.0, 1.0) : 1.0;
+        final double s = (boom + impact + drone) * fadeOut;
+        pcm[i] = ((s / (1.0 + s.abs() * 0.4)) * 30000.0).round().clamp(-32767, 32767);
+      }
+    } else {
+      // Uplifting Mission Clear golden synth chime chord
+      final notes = [261.63, 329.63, 392.00, 523.25];
+      final starts = [0.0, 0.16, 0.32, 0.48];
+      for (int i = 0; i < numSamples; i++) {
+        final double t = i / sampleRate;
+        double sample = 0.0;
+        for (int n = 0; n < notes.length; n++) {
+          if (t >= starts[n]) {
+            final dt = t - starts[n];
+            final env = math.min(1.0, dt / 0.03) * math.exp(-dt * 1.15);
+            final hz = notes[n];
+            sample += (math.sin(2.0 * math.pi * hz * dt) + 0.3 * math.sin(4.0 * math.pi * hz * dt)) * 0.28 * env;
+          }
+        }
+        final double fadeOut = t > 2.4 ? ((3.0 - t) / 0.6).clamp(0.0, 1.0) : 1.0;
+        pcm[i] = ((sample * fadeOut) * 29000.0).round().clamp(-32767, 32767);
+      }
+    }
+
+    final tempDir = await getTemporaryDirectory();
+    final outPath = '${tempDir.path}/vcs_sfx_${isFailStyle ? "fail" : "win"}_${DateTime.now().millisecondsSinceEpoch}.wav';
+    await File(outPath).writeAsBytes(_encodeMonoWav(pcm, sampleRate), flush: true);
+    return outPath;
+  }
+}
+
+// Renders glowing cinematic Freeze-Frame Banner PNG via Flutter Canvas (works on FFmpeg min_gpl!)
+Future<String> renderFreezeBannerPng({
+  required String titleText,
+  required String subtitleText,
+  required bool isFailStyle,
+}) async {
+  const double width = 720;
+  const double height = 1280;
+  final recorder = ui.PictureRecorder();
+  final canvas = Canvas(recorder, const Rect.fromLTWH(0, 0, width, height));
+
+  const bandRect = Rect.fromLTWH(0, 510, width, 260);
+  final bandPaint = Paint()
+    ..shader = ui.Gradient.linear(
+      const Offset(0, 510),
+      const Offset(0, 770),
+      [
+        Colors.black.withValues(alpha: 0.0),
+        Colors.black.withValues(alpha: 0.84),
+        Colors.black.withValues(alpha: 0.84),
+        Colors.black.withValues(alpha: 0.0),
+      ],
+      const [0.0, 0.18, 0.82, 1.0],
+    );
+  canvas.drawRect(bandRect, bandPaint);
+
+  final accentColor = isFailStyle ? const Color(0xFFFF2E4C) : const Color(0xFFFFC107);
+  final linePaint = Paint()
+    ..color = accentColor.withValues(alpha: 0.9)
+    ..strokeWidth = 3.5;
+  canvas.drawLine(const Offset(80, 555), const Offset(640, 555), linePaint);
+  canvas.drawLine(const Offset(80, 725), const Offset(640, 725), linePaint);
+
+  final cleanTitle = titleText.trim().isEmpty
+      ? (isFailStyle ? 'BUSTED' : 'MISSION PASSED')
+      : titleText.trim().toUpperCase();
+
+  final titlePainter = TextPainter(
+    text: TextSpan(
+      text: cleanTitle,
+      style: TextStyle(
+        color: accentColor,
+        fontSize: cleanTitle.length > 12 ? 48 : 66,
+        fontWeight: FontWeight.w900,
+        letterSpacing: 3.0,
+        shadows: [
+          Shadow(color: accentColor.withValues(alpha: 0.8), blurRadius: 24),
+          const Shadow(color: Colors.black, blurRadius: 8, offset: Offset(0, 4)),
+        ],
+      ),
+    ),
+    textAlign: TextAlign.center,
+    textDirection: TextDirection.ltr,
+    maxLines: 2,
+  )..layout(maxWidth: width - 64);
+
+  titlePainter.paint(
+    canvas,
+    Offset((width - titlePainter.width) / 2, 616 - titlePainter.height / 2),
+  );
+
+  if (subtitleText.trim().isNotEmpty) {
+    final subPainter = TextPainter(
+      text: TextSpan(
+        text: subtitleText.trim(),
+        style: const TextStyle(
+          color: Colors.white,
+          fontSize: 24,
+          fontWeight: FontWeight.w700,
+          letterSpacing: 1.5,
+          shadows: [Shadow(color: Colors.black, blurRadius: 6)],
+        ),
+      ),
+      textAlign: TextAlign.center,
+      textDirection: TextDirection.ltr,
+      maxLines: 1,
+    )..layout(maxWidth: width - 80);
+
+    subPainter.paint(
+      canvas,
+      Offset((width - subPainter.width) / 2, 676),
+    );
+  }
+
+  final picture = recorder.endRecording();
+  final image = await picture.toImage(width.toInt(), height.toInt());
+  final byteData = await image.toByteData(format: ui.ImageByteFormat.png);
+  image.dispose();
+
+  final tempDir = await getTemporaryDirectory();
+  final outPath = '${tempDir.path}/vcs_banner_${DateTime.now().millisecondsSinceEpoch}.png';
+  await File(outPath).writeAsBytes(byteData!.buffer.asUint8List(), flush: true);
+  return outPath;
+}
+
+// ============================================================================
+// MEDIA PROBE & OFFLINE HYPE MOMENT SCANNER HELPERS
+// ============================================================================
+class VideoProbeResult {
+  final bool hasAudio;
+  final double durationSec;
+  const VideoProbeResult({required this.hasAudio, required this.durationSec});
+}
+
+Future<VideoProbeResult> probeVideoInfo(String videoPath) async {
+  bool hasAudio = false;
+  double durationSec = 0.0;
   try {
     final session = await FFprobeKit.getMediaInformation(videoPath);
     final info = session.getMediaInformation();
-    final streams = info?.getStreams();
-    if (streams != null) {
-      for (final s in streams) {
-        if (s.getType() == 'audio') return true;
+    if (info != null) {
+      final durStr = info.getDuration();
+      if (durStr != null) {
+        durationSec = double.tryParse(durStr) ?? 0.0;
       }
-      return false;
+      final streams = info.getStreams();
+      if (streams != null) {
+        for (final s in streams) {
+          if (s.getType() == 'audio') {
+            hasAudio = true;
+            break;
+          }
+        }
+      }
     }
+  } catch (_) {
+    hasAudio = true;
+  }
+
+  if (durationSec <= 0.1) {
+    try {
+      final ctrl = VideoPlayerController.file(File(videoPath));
+      await ctrl.initialize();
+      durationSec = ctrl.value.duration.inMilliseconds / 1000.0;
+      await ctrl.dispose();
+    } catch (_) {}
+  }
+
+  return VideoProbeResult(
+    hasAudio: hasAudio,
+    durationSec: durationSec > 0.1 ? durationSec : 5.0,
+  );
+}
+
+Future<bool> checkVideoHasAudio(String videoPath) async {
+  final info = await probeVideoInfo(videoPath);
+  return info.hasAudio;
+}
+
+class HypeMoment {
+  final double peakSec;
+  final int scorePercent;
+  const HypeMoment({required this.peakSec, required this.scorePercent});
+}
+
+Future<List<HypeMoment>> scanAudioHypeMoments(String videoPath) async {
+  final tempDir = await getTemporaryDirectory();
+  final pcmPath = '${tempDir.path}/vcs_hype_scan_${DateTime.now().millisecondsSinceEpoch}.pcm';
+
+  final session = await FFmpegKit.executeWithArguments([
+    '-y',
+    '-i',
+    videoPath,
+    '-vn',
+    '-ac',
+    '1',
+    '-ar',
+    '1000',
+    '-f',
+    's16le',
+    pcmPath,
+  ]);
+  final rc = await session.getReturnCode();
+  final file = File(pcmPath);
+  if (!ReturnCode.isSuccess(rc) || !file.existsSync()) {
+    return [];
+  }
+
+  final Uint8List bytes = await file.readAsBytes();
+  try {
+    file.deleteSync();
   } catch (_) {}
-  return true;
+
+  final int totalSamples = bytes.length ~/ 2;
+  final int totalSec = totalSamples ~/ 1000;
+  if (totalSec < 2) return [];
+
+  final ByteData bd = ByteData.sublistView(bytes);
+  final List<double> energies = List<double>.filled(totalSec, 0.0);
+  double maxEnergy = 0.0;
+
+  for (int sec = 0; sec < totalSec; sec++) {
+    double sumSq = 0.0;
+    final int base = sec * 1000;
+    for (int k = 0; k < 1000; k++) {
+      final int sample = bd.getInt16((base + k) * 2, Endian.little);
+      sumSq += sample * sample;
+    }
+    final double rms = math.sqrt(sumSq / 1000.0);
+    energies[sec] = rms;
+    if (rms > maxEnergy) maxEnergy = rms;
+  }
+
+  if (maxEnergy < 20.0) return [];
+
+  final List<int> indices = List<int>.generate(totalSec, (i) => i);
+  indices.sort((a, b) => energies[b].compareTo(energies[a]));
+
+  final int minGap = (totalSec / 6).round().clamp(5, 22);
+  final List<HypeMoment> results = [];
+
+  for (final sec in indices) {
+    if (results.length >= 8) break;
+    final bool tooClose = results.any((m) => (m.peakSec - sec).abs() < minGap);
+    if (tooClose) continue;
+    final int pct = ((energies[sec] / maxEnergy) * 100).round().clamp(10, 100);
+    results.add(HypeMoment(peakSec: sec.toDouble(), scorePercent: pct));
+  }
+
+  return results;
+}
+
+String formatClock(double seconds) {
+  final safe = seconds.isNaN || seconds < 0 ? 0.0 : seconds;
+  final d = Duration(milliseconds: (safe * 1000).round());
+  final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
+  final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
+  return '$m:$s';
 }
 
 class ViralClipStudioApp extends StatelessWidget {
@@ -701,7 +996,7 @@ class ViralClipStudioApp extends StatelessWidget {
 }
 
 // ============================================================================
-// 1. SPLASH SCREEN (Viral Clip Studio Neon Branding)
+// 1. SPLASH SCREEN
 // ============================================================================
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -793,11 +1088,11 @@ class _SplashScreenState extends State<SplashScreen> {
                   'Create  •  Edit  •  Share',
                   style: TextStyle(color: Colors.white70, fontSize: 15, letterSpacing: 1.2),
                 ),
-                const SizedBox(height: 18),
+                const SizedBox(height: 16),
                 const Text(
-                  'Phase 2 Engine Ready\nEffects • Built-In Music • Transitions',
+                  'Vice Gaming Clipper • AI Facecam • 60 FPS Pro',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: AppColors.neonCyan, fontSize: 13, height: 1.4),
+                  style: TextStyle(color: AppColors.neonCyan, fontSize: 12),
                 ),
                 const Spacer(),
                 ClipRRect(
@@ -880,6 +1175,14 @@ class _MainShellScreenState extends State<MainShellScreen> {
     }
   }
 
+  void _openGamingStudio() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => GamingClipStudioScreen(onExported: _saveExportRecord),
+      ),
+    );
+  }
+
   void _openPhotoToVideo({String? initialTransitionId}) {
     Navigator.of(context).push(
       MaterialPageRoute(
@@ -887,6 +1190,14 @@ class _MainShellScreenState extends State<MainShellScreen> {
           initialTransitionId: initialTransitionId,
           onExported: _saveExportRecord,
         ),
+      ),
+    );
+  }
+
+  void _openStreamerSplit() {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => StreamerSplitScreen(onExported: _saveExportRecord),
       ),
     );
   }
@@ -932,69 +1243,76 @@ class _MainShellScreenState extends State<MainShellScreen> {
     return ListView(
       padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
       children: [
-        // Hero Banner -> 1-Click Photo-to-Video Transitions
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(20),
-            gradient: const LinearGradient(
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-              colors: [Color(0xFF4C1D95), Color(0xFF9333EA), Color(0xFF1D4ED8)],
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: AppColors.neonPurple.withValues(alpha: 0.35),
-                blurRadius: 18,
-                offset: const Offset(0, 6),
+        // NEW Hero Banner -> Vice Gaming Studio (Open-World Clipper)
+        InkWell(
+          onTap: _openGamingStudio,
+          borderRadius: BorderRadius.circular(20),
+          child: Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(20),
+              gradient: const LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [Color(0xFF831843), Color(0xFFDB2777), Color(0xFFF97316)],
               ),
-            ],
-          ),
-          child: Row(
-            children: [
-              Container(
-                width: 68,
-                height: 68,
-                decoration: BoxDecoration(
-                  color: Colors.black.withValues(alpha: 0.25),
-                  borderRadius: BorderRadius.circular(16),
-                  border: Border.all(color: Colors.white24),
+              boxShadow: [
+                BoxShadow(
+                  color: const Color(0xFFDB2777).withValues(alpha: 0.35),
+                  blurRadius: 18,
+                  offset: const Offset(0, 6),
                 ),
-                child: const Icon(Icons.auto_awesome_motion, size: 38, color: AppColors.neonCyan),
-              ),
-              const SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text(
-                      '1-Click Photo\nto Viral Reels ✨',
-                      style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800, height: 1.15),
-                    ),
-                    const SizedBox(height: 10),
-                    ElevatedButton(
-                      onPressed: () => _openPhotoToVideo(initialTransitionId: 'auto_mix'),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: Colors.white.withValues(alpha: 0.22),
-                        foregroundColor: Colors.white,
-                        elevation: 0,
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                        shape: RoundedRectangleBorder(
+              ],
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.28),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: Colors.white30),
+                  ),
+                  child: const Icon(Icons.sports_esports_rounded, size: 36, color: Colors.white),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Vice Gaming Clipper 🎮',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                      ),
+                      const SizedBox(height: 3),
+                      const Text(
+                        'Auto Hype Scan • Fail Freeze SFX • 60 FPS',
+                        style: TextStyle(color: Colors.white, fontSize: 12),
+                      ),
+                      const SizedBox(height: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                        decoration: BoxDecoration(
+                          color: Colors.black38,
                           borderRadius: BorderRadius.circular(20),
-                          side: const BorderSide(color: Colors.white38),
+                          border: Border.all(color: Colors.white38),
+                        ),
+                        child: const Text(
+                          'Open Gaming Studio →',
+                          style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12),
                         ),
                       ),
-                      child: const Text('Create Reel →', style: TextStyle(fontWeight: FontWeight.bold)),
-                    ),
-                  ],
+                    ],
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 14),
 
-        // 2 Big Action Cards (New Project + Photo Transitions)
+        // 2 Big Action Cards (New Project + Live Auto-Split)
         Row(
           children: [
             Expanded(
@@ -1008,7 +1326,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
             const SizedBox(width: 12),
             Expanded(
               child: _bigActionCard(
-                title: 'Auto-Split\nShorts ✂️',
+                title: 'Auto-Split\nLive Preview ✂️',
                 icon: Icons.content_cut_rounded,
                 colors: const [Color(0xFF0EA5E9), Color(0xFF2563EB)],
                 onTap: _openAutoSplit,
@@ -1016,16 +1334,60 @@ class _MainShellScreenState extends State<MainShellScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
 
-        // 2x3 Quick Tools Grid (ALL ACTIVE!)
+        // Streamer Split (AI Facecam Top + Gameplay Bottom)
+        InkWell(
+          onTap: _openStreamerSplit,
+          borderRadius: BorderRadius.circular(16),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(16),
+              gradient: const LinearGradient(
+                colors: [Color(0xFF0F172A), Color(0xFF1E1B4B), Color(0xFF3B0764)],
+              ),
+              border: Border.all(color: AppColors.neonCyan.withValues(alpha: 0.5)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  width: 44,
+                  height: 44,
+                  decoration: BoxDecoration(
+                    color: AppColors.neonCyan.withValues(alpha: 0.16),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: const Icon(Icons.face_retouching_natural, color: AppColors.neonCyan, size: 24),
+                ),
+                const SizedBox(width: 12),
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Streamer Split (AI Facecam)',
+                          style: TextStyle(fontSize: 14, fontWeight: FontWeight.bold)),
+                      SizedBox(height: 2),
+                      Text('Facecam upar + Gameplay neeche (9:16 Auto Detect)',
+                          style: TextStyle(color: Colors.white70, fontSize: 11)),
+                    ],
+                  ),
+                ),
+                const Icon(Icons.arrow_forward_ios_rounded, color: AppColors.neonCyan, size: 15),
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 14),
+
+        // 2x3 Quick Tools Grid
         GridView.count(
           crossAxisCount: 3,
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
           crossAxisSpacing: 12,
           mainAxisSpacing: 12,
-          childAspectRatio: 1.02,
+          childAspectRatio: 1.05,
           children: [
             _quickToolCard(
               label: 'Photo Reels',
@@ -1034,7 +1396,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
               onTap: _openPhotoToVideo,
             ),
             _quickToolCard(
-              label: 'Effects (12)',
+              label: 'Effects (14)',
               icon: Icons.auto_fix_high_rounded,
               color: const Color(0xFFFBBF24),
               onTap: _openEffectsGallery,
@@ -1065,7 +1427,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
             ),
           ],
         ),
-        const SizedBox(height: 20),
+        const SizedBox(height: 18),
 
         if (_recentExports.isNotEmpty) ...[
           Row(
@@ -1094,33 +1456,23 @@ class _MainShellScreenState extends State<MainShellScreen> {
       onTap: onTap,
       borderRadius: BorderRadius.circular(18),
       child: Container(
-        height: 118,
+        height: 108,
         padding: const EdgeInsets.all(14),
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(18),
-          gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: colors,
-          ),
+          gradient: LinearGradient(begin: Alignment.topLeft, end: Alignment.bottomRight, colors: colors),
           boxShadow: [
-            BoxShadow(
-              color: colors.first.withValues(alpha: 0.3),
-              blurRadius: 12,
-              offset: const Offset(0, 4),
-            ),
+            BoxShadow(color: colors.first.withValues(alpha: 0.3), blurRadius: 12, offset: const Offset(0, 4)),
           ],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 34, color: Colors.white),
+            Icon(icon, size: 30, color: Colors.white),
             const SizedBox(height: 8),
-            Text(
-              title,
-              textAlign: TextAlign.center,
-              style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700, height: 1.2),
-            ),
+            Text(title,
+                textAlign: TextAlign.center,
+                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, height: 1.2)),
           ],
         ),
       ),
@@ -1147,18 +1499,13 @@ class _MainShellScreenState extends State<MainShellScreen> {
           children: [
             Container(
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(
-                color: color.withValues(alpha: 0.16),
-                shape: BoxShape.circle,
-              ),
-              child: Icon(icon, color: color, size: 25),
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.16), shape: BoxShape.circle),
+              child: Icon(icon, color: color, size: 24),
             ),
             const SizedBox(height: 8),
-            Text(
-              label,
-              style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
-              textAlign: TextAlign.center,
-            ),
+            Text(label,
+                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: Colors.white),
+                textAlign: TextAlign.center),
           ],
         ),
       ),
@@ -1256,13 +1603,31 @@ class _MainShellScreenState extends State<MainShellScreen> {
         const Text('Built-In Studio Packs', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
         const SizedBox(height: 6),
         const Text(
-          'Sabhi Premium Effects, Music Packs aur Photo-to-Video Transitions app ke andar default preloaded hain:',
+          'Gaming Tools, Effects, Music Packs aur Transitions sab app mein active hain:',
           style: TextStyle(color: Colors.white60, fontSize: 13),
         ),
         const SizedBox(height: 16),
         _packActionCard(
-          title: '12 Premium Effects & Filters',
-          subtitle: 'Neon Glow, Cinematic, VHS Retro, RGB Glitch, Vintage, Dream Glow & more',
+          title: 'Vice Gaming Clipper Studio',
+          subtitle: 'Auto Hype Audio Scan + Fail/Mission Freeze SFX + HUD-Safe 9:16 + 60 FPS',
+          icon: Icons.sports_esports_rounded,
+          color: AppColors.viceOrange,
+          badge: 'NEW v2.2',
+          onTap: _openGamingStudio,
+        ),
+        const SizedBox(height: 12),
+        _packActionCard(
+          title: 'Streamer Split (AI Facecam)',
+          subtitle: 'Auto face detect karke Facecam upar + Gameplay neeche 9:16 Short banayein',
+          icon: Icons.face_retouching_natural,
+          color: AppColors.neonCyan,
+          badge: 'AI',
+          onTap: _openStreamerSplit,
+        ),
+        const SizedBox(height: 12),
+        _packActionCard(
+          title: '14 Premium Effects & Filters',
+          subtitle: 'Vice Neon, Miami Sunset, Neon Glow, Cinematic, VHS Retro, RGB Glitch & more',
           icon: Icons.auto_fix_high_rounded,
           color: const Color(0xFFFBBF24),
           badge: 'ACTIVE',
@@ -1273,7 +1638,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
           title: '8 Built-In Studio Music Packs',
           subtitle: 'Lo-Fi, Viral Hype, Cinematic, Reels Pop, Wedding Piano, Cyberpunk (Offline Ready)',
           icon: Icons.music_note_rounded,
-          color: AppColors.neonCyan,
+          color: AppColors.neonBlue,
           badge: 'ACTIVE',
           onTap: _openMusicLibrary,
         ),
@@ -1371,12 +1736,12 @@ class _MainShellScreenState extends State<MainShellScreen> {
                 children: [
                   Icon(Icons.verified_rounded, color: Colors.greenAccent, size: 28),
                   SizedBox(width: 10),
-                  Text('Viral Clip Studio v2.0', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
+                  Text('Viral Clip Studio v2.2', style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold)),
                 ],
               ),
               SizedBox(height: 8),
               Text(
-                'Status: FREE TEST BUILD (Phase 1 + Phase 2)\nSabhi tools, effects, music packs aur transitions bina kisi lock ke test karein.',
+                'Status: FREE TEST BUILD (Vice Gaming Edition)\nSabhi tools bina kisi paywall ke test karein.',
                 style: TextStyle(color: Colors.white70, height: 1.4),
               ),
             ],
@@ -1395,13 +1760,13 @@ class _MainShellScreenState extends State<MainShellScreen> {
             children: [
               Text('Active Testing Features:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
               SizedBox(height: 10),
-              Text('✓ 12 Live Video Effects (Neon, Glitch, VHS, Cinematic, Blur)'),
-              Text('✓ 8 Built-In Offline Music Packs + Phone MP3 Mixing'),
-              Text('✓ One-Click Photo-to-Video (12 Premium xfade Transitions)'),
-              Text('✓ Blur-Fill Background Frame for 9:16 Photo Reels'),
-              Text('✓ Auto-Split Shorts (15s / 30s / 45s / 60s Parts)'),
-              Text('✓ Timeline Trim, Crop, Speed (0.5x-2x), Rotate & Mirror'),
-              Text('✓ Multi-Clip Merger, 480P-Original Export & Social Share'),
+              Text('✓ Vice Gaming Clipper: Offline Auto Hype Audio Scanner'),
+              Text('✓ 1-Tap Fail Freeze & Mission Clear Ending + Bass SFX'),
+              Text('✓ Vice Neon & Miami Sunset Color Grading Presets'),
+              Text('✓ HUD-Safe Cinema Blur 9:16 + 60 FPS Smooth Gaming Export'),
+              Text('✓ Streamer Split: Offline AI Facecam Top + Gameplay Bottom'),
+              Text('✓ Crash-Proof FFmpeg Merger + Auto-Split Live Preview'),
+              Text('✓ 8 Built-In Music Packs + 12 One-Click Photo Transitions'),
             ],
           ),
         ),
@@ -1446,7 +1811,7 @@ class _MainShellScreenState extends State<MainShellScreen> {
                 Icon(Icons.science_rounded, size: 14, color: Colors.greenAccent),
                 SizedBox(width: 4),
                 Text(
-                  'PHASE 2 TEST',
+                  'TEST v2.2',
                   style: TextStyle(color: Colors.greenAccent, fontSize: 10, fontWeight: FontWeight.bold),
                 ),
               ],
@@ -1472,7 +1837,1996 @@ class _MainShellScreenState extends State<MainShellScreen> {
 }
 
 // ============================================================================
-// 3. EFFECTS GALLERY SCREEN (Browse & Apply Directly to Video)
+// 3. VICE GAMING CLIPPER STUDIO (Hype Scan + Fail/Mission Freeze + 60 FPS)
+// ============================================================================
+class GamingClipStudioScreen extends StatefulWidget {
+  final Future<void> Function(String path) onExported;
+
+  const GamingClipStudioScreen({super.key, required this.onExported});
+
+  @override
+  State<GamingClipStudioScreen> createState() => _GamingClipStudioScreenState();
+}
+
+class _GamingClipStudioScreenState extends State<GamingClipStudioScreen> {
+  String? _videoPath;
+  String _videoName = 'Koi gameplay video select nahi hai';
+  VideoPlayerController? _controller;
+  bool _isVideoReady = false;
+  double _totalSec = 1.0;
+  RangeValues _clipRange = const RangeValues(0, 1);
+
+  // 1. Offline Auto Hype Scanner
+  bool _isScanningHype = false;
+  List<HypeMoment> _hypeMoments = [];
+  int _selectedHypeIdx = -1;
+
+  // 2. Gaming Layout (cinema_blur / action_zoom)
+  String _layoutMode = 'cinema_blur';
+
+  // 3. Color Preset (Default: Vice Neon)
+  VideoEffectPreset _selectedEffect = kStudioEffects.firstWhere((e) => e.id == 'vice_neon');
+
+  // 4. Freeze-Frame Ending ('none', 'fail', 'mission')
+  String _freezeMode = 'none';
+  final TextEditingController _bannerTitleCtrl = TextEditingController(text: 'BUSTED');
+  final TextEditingController _bannerSubCtrl = TextEditingController(text: 'BETTER LUCK NEXT TIME');
+
+  // 5. 60 FPS Smooth Gaming Toggle
+  bool _use60Fps = true;
+  bool _isExporting = false;
+  String _exportStatus = '';
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    _bannerTitleCtrl.dispose();
+    _bannerSubCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickGameplayVideo() async {
+    final res = await FilePicker.platform.pickFiles(type: FileType.video);
+    if (res == null || res.files.single.path == null) return;
+
+    await _controller?.dispose();
+    final path = res.files.single.path!;
+    final name = res.files.single.name;
+
+    setState(() {
+      _videoPath = path;
+      _videoName = name;
+      _isVideoReady = false;
+      _controller = null;
+      _hypeMoments = [];
+      _selectedHypeIdx = -1;
+    });
+
+    final ctrl = VideoPlayerController.file(File(path));
+    await ctrl.initialize();
+    ctrl.addListener(() {
+      if (mounted) setState(() {});
+    });
+
+    final secs = ctrl.value.duration.inMilliseconds / 1000.0;
+    final safeTotal = secs > 1.0 ? secs : 1.0;
+    final defaultEnd = math.min(safeTotal, 30.0);
+
+    if (!mounted) {
+      await ctrl.dispose();
+      return;
+    }
+
+    setState(() {
+      _controller = ctrl;
+      _isVideoReady = true;
+      _totalSec = safeTotal;
+      _clipRange = RangeValues(0, defaultEnd);
+    });
+  }
+
+  Future<void> _runHypeScan() async {
+    if (_videoPath == null) return;
+    setState(() {
+      _isScanningHype = true;
+      _hypeMoments = [];
+      _selectedHypeIdx = -1;
+    });
+
+    try {
+      final probe = await probeVideoInfo(_videoPath!);
+      if (!probe.hasAudio) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Is video mein audio track nahi hai — manual slider se clip select karein.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
+        }
+        return;
+      }
+
+      final moments = await scanAudioHypeMoments(_videoPath!);
+      if (!mounted) return;
+      setState(() => _hypeMoments = moments);
+
+      if (moments.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Koi clear loud peak nahi mila — manual range use karein.')),
+        );
+      } else {
+        _jumpToHypeMoment(0);
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Scan error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isScanningHype = false);
+    }
+  }
+
+  Future<void> _jumpToHypeMoment(int idx) async {
+    if (idx < 0 || idx >= _hypeMoments.length) return;
+    final peak = _hypeMoments[idx].peakSec;
+    final double start = math.max(0.0, peak - 12.0);
+    final double end = math.min(_totalSec, start + 30.0);
+    final double adjustedStart = (end - start < 5.0) ? math.max(0.0, end - 15.0) : start;
+
+    setState(() {
+      _selectedHypeIdx = idx;
+      _clipRange = RangeValues(adjustedStart, end);
+    });
+
+    await _controller?.seekTo(Duration(milliseconds: (adjustedStart * 1000).round()));
+    await _controller?.play();
+  }
+
+  void _setFreezeMode(String mode) {
+    setState(() {
+      _freezeMode = mode;
+      if (mode == 'fail') {
+        _bannerTitleCtrl.text = 'BUSTED';
+        _bannerSubCtrl.text = 'EPIC FAIL';
+      } else if (mode == 'mission') {
+        _bannerTitleCtrl.text = 'MISSION PASSED';
+        _bannerSubCtrl.text = 'RESPECT +999';
+      }
+    });
+  }
+
+  void _openFacecamSplitWithCurrentVideo() {
+    if (_videoPath == null) return;
+    _controller?.pause();
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => StreamerSplitScreen(
+          onExported: widget.onExported,
+          initialVideoPath: _videoPath,
+          initialVideoName: _videoName,
+        ),
+      ),
+    );
+  }
+
+  Future<void> _exportGamingClip() async {
+    if (_videoPath == null) return;
+    await _controller?.pause();
+
+    setState(() {
+      _isExporting = true;
+      _exportStatus = 'Gaming clip prepare ho raha hai...';
+    });
+
+    try {
+      final hasAccess = await Gal.hasAccess(toAlbum: true);
+      if (!hasAccess) await Gal.requestAccess(toAlbum: true);
+
+      final probe = await probeVideoInfo(_videoPath!);
+      final double clipDur = math.max(1.0, _clipRange.end - _clipRange.start);
+      final int outFps = _use60Fps ? 60 : 30;
+      final tempDir = await getTemporaryDirectory();
+      final outPath = '${tempDir.path}/vcs_gaming_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      String buildLayoutGraph(String inLabel, String outLabel, String extraFilter) {
+        final String fxChain = extraFilter.isNotEmpty ? ',$extraFilter' : '';
+        if (_layoutMode == 'cinema_blur') {
+          return '[$inLabel]split=2[${inLabel}bg][${inLabel}fg];'
+              '[${inLabel}bg]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,gblur=sigma=20[${inLabel}bgb];'
+              '[${inLabel}fg]scale=720:1280:force_original_aspect_ratio=decrease[${inLabel}fgs];'
+              '[${inLabel}bgb][${inLabel}fgs]overlay=(W-w)/2:(H-h)/2,setsar=1,fps=$outFps$fxChain,format=yuv420p[$outLabel]';
+        } else {
+          return '[$inLabel]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,'
+              'setsar=1,fps=$outFps$fxChain,format=yuv420p[$outLabel]';
+        }
+      }
+
+      final List<String> args = ['-y'];
+
+      if (_freezeMode == 'none') {
+        setState(() => _exportStatus = 'Rendering ${outFps} FPS Gaming Short...');
+        final fc = buildLayoutGraph('0:v', 'vout', _selectedEffect.ffmpegFilter);
+        args.addAll([
+          '-ss',
+          _clipRange.start.toStringAsFixed(2),
+          '-i',
+          _videoPath!,
+          '-t',
+          clipDur.toStringAsFixed(2),
+          '-filter_complex',
+          fc,
+          '-map',
+          '[vout]',
+        ]);
+
+        if (probe.hasAudio) {
+          args.addAll(['-map', '0:a', '-c:a', 'aac', '-b:a', '128k']);
+        } else {
+          args.add('-an');
+        }
+      } else {
+        final bool isFail = _freezeMode == 'fail';
+        setState(() => _exportStatus = 'Freeze-Frame banner & SFX ban raha hai...');
+
+        // 1. Extract exact last frame for Freeze-Frame ending
+        final double freezeSec = math.max(_clipRange.start, _clipRange.end - 0.12);
+        final String freezeImgPath = '${tempDir.path}/vcs_freeze_${DateTime.now().millisecondsSinceEpoch}.jpg';
+        final snapSession = await FFmpegKit.executeWithArguments([
+          '-y',
+          '-ss',
+          freezeSec.toStringAsFixed(2),
+          '-i',
+          _videoPath!,
+          '-vframes',
+          '1',
+          '-q:v',
+          '2',
+          freezeImgPath,
+        ]);
+        final snapRc = await snapSession.getReturnCode();
+        if (!ReturnCode.isSuccess(snapRc) || !File(freezeImgPath).existsSync()) {
+          throw Exception('Freeze frame capture nahi ho paya');
+        }
+
+        // 2. Render transparent PNG Banner + Dramatic SFX locally
+        final String bannerPngPath = await renderFreezeBannerPng(
+          titleText: _bannerTitleCtrl.text,
+          subtitleText: _bannerSubCtrl.text,
+          isFailStyle: isFail,
+        );
+        final String sfxPath = await StudioGamingSfxGenerator.generateFreezeSfx(isFailStyle: isFail);
+
+        setState(() => _exportStatus = 'Rendering $outFps FPS clip + 3s Freeze Ending...');
+
+        final String freezeTint = isFail
+            ? 'hue=s=0,eq=contrast=1.28:brightness=-0.07,colorbalance=rs=0.22:rm=0.10,vignette=PI/3.5'
+            : 'eq=contrast=1.18:saturation=1.35:brightness=0.05,colorbalance=rs=0.14:gs=0.08:bs=-0.10,vignette=PI/4';
+
+        final List<String> filters = [];
+        filters.add(buildLayoutGraph('0:v', 'vmain', _selectedEffect.ffmpegFilter));
+        filters.add(buildLayoutGraph('1:v', 'vfbase', freezeTint));
+        filters.add('[vfbase][2:v]overlay=0:0,setpts=PTS-STARTPTS,format=yuv420p[vfreeze]');
+
+        if (probe.hasAudio) {
+          filters.add(
+            '[0:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1,asetpts=PTS-STARTPTS[amain]',
+          );
+        } else {
+          filters.add(
+            'anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${clipDur.toStringAsFixed(2)},asetpts=PTS-STARTPTS[amain]',
+          );
+        }
+        filters.add(
+          '[3:a]aformat=sample_rates=44100:channel_layouts=stereo,atrim=duration=3.0,asetpts=PTS-STARTPTS[afreeze]',
+        );
+        filters.add('[vmain]setpts=PTS-STARTPTS[vmain_s]');
+        filters.add('[vmain_s][amain][vfreeze][afreeze]concat=n=2:v=1:a=1[vout][aout]');
+
+        args.addAll([
+          '-ss',
+          _clipRange.start.toStringAsFixed(2),
+          '-i',
+          _videoPath!,
+          '-t',
+          clipDur.toStringAsFixed(2),
+          '-loop',
+          '1',
+          '-t',
+          '3.0',
+          '-i',
+          freezeImgPath,
+          '-i',
+          bannerPngPath,
+          '-i',
+          sfxPath,
+          '-filter_complex',
+          filters.join(';'),
+          '-map',
+          '[vout]',
+          '-map',
+          '[aout]',
+          '-c:a',
+          'aac',
+          '-b:a',
+          '128k',
+        ]);
+      }
+
+      args.addAll([
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-crf',
+        '22',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+        outPath,
+      ]);
+
+      final session = await FFmpegKit.executeWithArguments(args);
+      final rc = await session.getReturnCode();
+
+      if (!ReturnCode.isSuccess(rc) || !File(outPath).existsSync()) {
+        final logs = await session.getOutput();
+        throw Exception(logs?.split('\n').last ?? 'Gaming render failed');
+      }
+
+      await Gal.putVideo(outPath, album: 'Viral Clip Studio');
+      await widget.onExported(outPath);
+
+      if (!mounted) return;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ExportSuccessScreen(outputPath: outPath, savedToGallery: true),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gaming Export Error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+          _exportStatus = '';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isPlaying = _controller?.value.isPlaying ?? false;
+    final gamingEffects = kStudioEffects
+        .where((e) => ['none', 'vice_neon', 'miami_sunset', 'hdr_vivid', 'cinematic', 'neon_glow'].contains(e.id))
+        .toList();
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Vice Gaming Clipper 🎮')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          // 1. Video Picker + Hype Scan Button
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  _videoName,
+                  style: const TextStyle(color: AppColors.neonCyan, fontWeight: FontWeight.w600, fontSize: 13),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: OutlinedButton.icon(
+                        onPressed: (_isExporting || _isScanningHype) ? null : _pickGameplayVideo,
+                        icon: const Icon(Icons.video_library_rounded, color: AppColors.viceOrange),
+                        label: Text(_videoPath == null ? 'Select Gameplay Video' : 'Change Video'),
+                      ),
+                    ),
+                    if (_isVideoReady) ...[
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: (_isExporting || _isScanningHype) ? null : _runHypeScan,
+                        icon: _isScanningHype
+                            ? const SizedBox(
+                                width: 15,
+                                height: 15,
+                                child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                              )
+                            : const Icon(Icons.local_fire_department_rounded, size: 18),
+                        label: Text(_isScanningHype ? 'Scanning...' : 'Find Hype'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.viceOrange,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Hype Moments Result Strip
+          if (_hypeMoments.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            const Text(
+              '🔥 Top Action / Hype Moments Found (Tap to Auto-Cut 30s):',
+              style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.amber),
+            ),
+            const SizedBox(height: 8),
+            SizedBox(
+              height: 44,
+              child: ListView.builder(
+                scrollDirection: Axis.horizontal,
+                itemCount: _hypeMoments.length,
+                itemBuilder: (ctx, i) {
+                  final m = _hypeMoments[i];
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: ChoiceChip(
+                      label: Text('🔥 #${i + 1} (${formatClock(m.peakSec)}) • ${m.scorePercent}%'),
+                      selected: _selectedHypeIdx == i,
+                      selectedColor: AppColors.viceOrange,
+                      onSelected: _isExporting ? null : (_) => _jumpToHypeMoment(i),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ],
+
+          // Live Preview Player with Live Color Grading
+          if (_isVideoReady && _controller != null) ...[
+            const SizedBox(height: 14),
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.viceOrange.withValues(alpha: 0.45)),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: AspectRatio(
+                aspectRatio: _controller!.value.aspectRatio,
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    ColorFiltered(
+                      colorFilter: ColorFilter.matrix(_selectedEffect.previewMatrix),
+                      child: VideoPlayer(_controller!),
+                    ),
+                    Positioned(
+                      left: 10,
+                      top: 10,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.black87,
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(color: _selectedEffect.accent),
+                        ),
+                        child: Text(
+                          '${_selectedEffect.name} • ${_use60Fps ? "60 FPS" : "30 FPS"}',
+                          style: TextStyle(color: _selectedEffect.accent, fontSize: 11, fontWeight: FontWeight.bold),
+                        ),
+                      ),
+                    ),
+                    GestureDetector(
+                      onTap: () => isPlaying ? _controller!.pause() : _controller!.play(),
+                      child: CircleAvatar(
+                        radius: 24,
+                        backgroundColor: Colors.black54,
+                        child: Icon(
+                          isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                          color: Colors.white,
+                          size: 30,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            // Clip Range Slider
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Start: ${formatClock(_clipRange.start)}',
+                          style: const TextStyle(color: AppColors.neonCyan, fontSize: 12)),
+                      Text('Clip: ${formatClock(_clipRange.end - _clipRange.start)}',
+                          style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      Text('End: ${formatClock(_clipRange.end)}',
+                          style: const TextStyle(color: AppColors.neonPink, fontSize: 12)),
+                    ],
+                  ),
+                  RangeSlider(
+                    values: _clipRange,
+                    min: 0,
+                    max: _totalSec,
+                    activeColor: AppColors.viceOrange,
+                    onChanged: _isExporting
+                        ? null
+                        : (v) {
+                            if (v.end - v.start < 1.0) return;
+                            setState(() => _clipRange = v);
+                            _controller?.seekTo(Duration(milliseconds: (v.start * 1000).round()));
+                          },
+                  ),
+                  const Divider(color: Colors.white12),
+
+                  // 9:16 Gaming Layout Mode
+                  const Text('9:16 Gaming Layout:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('Cinema Blur (HUD-Safe)'),
+                        selected: _layoutMode == 'cinema_blur',
+                        selectedColor: AppColors.neonPurple,
+                        onSelected: (_) => setState(() => _layoutMode = 'cinema_blur'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('Action Zoom'),
+                        selected: _layoutMode == 'action_zoom',
+                        selectedColor: AppColors.neonPurple,
+                        onSelected: (_) => setState(() => _layoutMode = 'action_zoom'),
+                      ),
+                      ActionChip(
+                        avatar: const Icon(Icons.face_retouching_natural, size: 15, color: AppColors.neonCyan),
+                        label: const Text('AI Facecam Split →'),
+                        onPressed: _openFacecamSplitWithCurrentVideo,
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+
+                  // Vice Color Presets
+                  const Text('Gaming Color Preset:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: gamingEffects.map((fx) {
+                      return ChoiceChip(
+                        label: Text(fx.name),
+                        selected: _selectedEffect.id == fx.id,
+                        selectedColor: fx.accent.withValues(alpha: 0.45),
+                        onSelected: (_) => setState(() => _selectedEffect = fx),
+                      );
+                    }).toList(),
+                  ),
+                  const Divider(color: Colors.white12, height: 22),
+
+                  // 1-Tap Fail / Mission Clear Freeze Ending
+                  const Text('1-Tap Freeze-Frame Ending (+ Dramatic SFX):',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('None'),
+                        selected: _freezeMode == 'none',
+                        selectedColor: Colors.white24,
+                        onSelected: (_) => _setFreezeMode('none'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('💀 Fail Freeze'),
+                        selected: _freezeMode == 'fail',
+                        selectedColor: Colors.redAccent,
+                        onSelected: (_) => _setFreezeMode('fail'),
+                      ),
+                      ChoiceChip(
+                        label: const Text('🏆 Mission Clear'),
+                        selected: _freezeMode == 'mission',
+                        selectedColor: Colors.amber.shade700,
+                        onSelected: (_) => _setFreezeMode('mission'),
+                      ),
+                    ],
+                  ),
+                  if (_freezeMode != 'none') ...[
+                    const SizedBox(height: 10),
+                    TextField(
+                      controller: _bannerTitleCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Freeze Banner Main Text',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    TextField(
+                      controller: _bannerSubCtrl,
+                      decoration: const InputDecoration(
+                        labelText: 'Subtitle Text (Optional)',
+                        border: OutlineInputBorder(),
+                        isDense: true,
+                      ),
+                    ),
+                  ],
+                  const Divider(color: Colors.white12, height: 22),
+
+                  // 60 FPS Toggle
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('60 FPS Smooth Gaming Mode'),
+                    subtitle: const Text('High-speed driving & action clips ke liye ultra-smooth export'),
+                    value: _use60Fps,
+                    activeThumbColor: AppColors.neonCyan,
+                    onChanged: _isExporting ? null : (v) => setState(() => _use60Fps = v),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            if (_isExporting) ...[
+              const LinearProgressIndicator(color: AppColors.viceOrange, backgroundColor: Colors.white12),
+              const SizedBox(height: 8),
+              Text(_exportStatus, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.neonCyan)),
+              const SizedBox(height: 12),
+            ],
+
+            ElevatedButton.icon(
+              onPressed: _isExporting ? null : _exportGamingClip,
+              icon: const Icon(Icons.rocket_launch_rounded),
+              label: Text(
+                _isExporting ? 'Rendering Gaming Short...' : 'Export Gaming Short (${_use60Fps ? "60" : "30"} FPS)',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.viceOrange,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// 4. LIVE STREAMER SPLIT SCREEN (Offline AI Facecam Top + Gameplay Bottom)
+// ============================================================================
+class StreamerSplitScreen extends StatefulWidget {
+  final Future<void> Function(String path) onExported;
+  final String? initialVideoPath;
+  final String? initialVideoName;
+
+  const StreamerSplitScreen({
+    super.key,
+    required this.onExported,
+    this.initialVideoPath,
+    this.initialVideoName,
+  });
+
+  @override
+  State<StreamerSplitScreen> createState() => _StreamerSplitScreenState();
+}
+
+class _StreamerSplitScreenState extends State<StreamerSplitScreen> {
+  String? _videoPath;
+  String _videoName = 'Koi stream / gameplay video select nahi hai';
+  VideoPlayerController? _controller;
+  bool _isVideoReady = false;
+  double _totalSeconds = 1.0;
+  RangeValues _trimRange = const RangeValues(0, 1);
+
+  double _faceX = 0.66;
+  double _faceY = 0.04;
+  double _faceW = 0.30;
+  double _faceH = 0.34;
+  String _detectBadge = 'Video select karein — AI khud facecam detect karega';
+  bool _isDetecting = false;
+
+  double _topPanelRatio = 0.38;
+  bool _blurFillGameplay = true;
+  bool _use60Fps = false;
+  bool _isExporting = false;
+  String _exportStatus = '';
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialVideoPath != null) {
+      _loadVideoFromPath(
+        widget.initialVideoPath!,
+        widget.initialVideoName ?? widget.initialVideoPath!.split('/').last,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickStreamVideo() async {
+    final res = await FilePicker.platform.pickFiles(type: FileType.video);
+    if (res == null || res.files.single.path == null) return;
+    await _loadVideoFromPath(res.files.single.path!, res.files.single.name);
+  }
+
+  Future<void> _loadVideoFromPath(String path, String name) async {
+    await _controller?.dispose();
+
+    setState(() {
+      _videoPath = path;
+      _videoName = name;
+      _isVideoReady = false;
+      _controller = null;
+      _detectBadge = 'Video load ho raha hai...';
+    });
+
+    final ctrl = VideoPlayerController.file(File(path));
+    await ctrl.initialize();
+    ctrl.addListener(() {
+      if (mounted) setState(() {});
+    });
+
+    final secs = ctrl.value.duration.inMilliseconds / 1000.0;
+    final safeTotal = secs > 1.0 ? secs : 1.0;
+    final defaultEnd = math.min(safeTotal, 60.0);
+
+    if (!mounted) {
+      await ctrl.dispose();
+      return;
+    }
+
+    setState(() {
+      _controller = ctrl;
+      _isVideoReady = true;
+      _totalSeconds = safeTotal;
+      _trimRange = RangeValues(0, defaultEnd);
+    });
+
+    await _autoDetectFacecam();
+  }
+
+  Future<void> _autoDetectFacecam() async {
+    if (_videoPath == null) return;
+    setState(() {
+      _isDetecting = true;
+      _detectBadge = 'AI Facecam scan kar raha hai...';
+    });
+
+    final detector = FaceDetector(
+      options: FaceDetectorOptions(performanceMode: FaceDetectorMode.fast, minFaceSize: 0.04),
+    );
+
+    try {
+      final tempDir = await getTemporaryDirectory();
+      final sampleFractions = [0.15, 0.45, 0.75];
+      Rect? bestFace;
+      int imgW = 640;
+      int imgH = 360;
+
+      for (int i = 0; i < sampleFractions.length; i++) {
+        final double sampleSec = (_totalSeconds * sampleFractions[i]).clamp(0.1, math.max(0.2, _totalSeconds - 0.3));
+        final String framePath = '${tempDir.path}/vcs_face_scan_$i.jpg';
+        final f = File(framePath);
+        if (f.existsSync()) f.deleteSync();
+
+        final session = await FFmpegKit.executeWithArguments([
+          '-y',
+          '-ss',
+          sampleSec.toStringAsFixed(2),
+          '-i',
+          _videoPath!,
+          '-vframes',
+          '1',
+          '-vf',
+          'scale=640:-2',
+          '-q:v',
+          '4',
+          framePath,
+        ]);
+        final rc = await session.getReturnCode();
+        if (!ReturnCode.isSuccess(rc) || !File(framePath).existsSync()) continue;
+
+        final bytes = await File(framePath).readAsBytes();
+        final decoded = await decodeImageFromList(bytes);
+        imgW = decoded.width;
+        imgH = decoded.height;
+        decoded.dispose();
+
+        final inputImage = InputImage.fromFilePath(framePath);
+        final faces = await detector.processImage(inputImage);
+        if (faces.isNotEmpty) {
+          faces.sort((a, b) => (b.boundingBox.width * b.boundingBox.height)
+              .compareTo(a.boundingBox.width * a.boundingBox.height));
+          bestFace = faces.first.boundingBox;
+          break;
+        }
+      }
+
+      if (bestFace != null && imgW > 0 && imgH > 0) {
+        final double cx = bestFace.center.dx / imgW;
+        final double cy = bestFace.center.dy / imgH;
+        final double fw = bestFace.width / imgW;
+        final double fh = bestFace.height / imgH;
+
+        final double boxW = (fw * 2.9).clamp(0.24, 0.48);
+        final double boxH = (fh * 2.6).clamp(0.24, 0.52);
+        final double boxX = (cx - boxW / 2.0).clamp(0.0, 0.995 - boxW);
+        final double boxY = (cy - boxH / 2.0).clamp(0.0, 0.995 - boxH);
+
+        String posLabel = 'Center';
+        if (cx < 0.45 && cy < 0.5) {
+          posLabel = 'Top-Left';
+        } else if (cx >= 0.55 && cy < 0.5) {
+          posLabel = 'Top-Right';
+        } else if (cx < 0.45 && cy >= 0.5) {
+          posLabel = 'Bottom-Left';
+        } else if (cx >= 0.55 && cy >= 0.5) {
+          posLabel = 'Bottom-Right';
+        }
+
+        if (mounted) {
+          setState(() {
+            _faceW = boxW;
+            _faceH = boxH;
+            _faceX = boxX;
+            _faceY = boxY;
+            _detectBadge = 'AI Facecam Detected: $posLabel ✅ (Box drag karke adjust kar sakte ho)';
+          });
+        }
+      } else {
+        if (mounted) {
+          setState(() {
+            _applyCornerPreset('TR');
+            _detectBadge = 'Auto face nahi mila — Cyan Box drag karo ya corner button chuno';
+          });
+        }
+      }
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _applyCornerPreset('TR');
+          _detectBadge = 'Manual Mode ready — Cyan Box facecam par set karo';
+        });
+      }
+    } finally {
+      await detector.close();
+      if (mounted) setState(() => _isDetecting = false);
+    }
+  }
+
+  void _applyCornerPreset(String code) {
+    setState(() {
+      _faceW = _faceW.clamp(0.22, 0.48);
+      _faceH = _faceH.clamp(0.24, 0.52);
+      if (code == 'TL') {
+        _faceX = 0.02;
+        _faceY = 0.03;
+      } else if (code == 'TR') {
+        _faceX = 0.98 - _faceW;
+        _faceY = 0.03;
+      } else if (code == 'BL') {
+        _faceX = 0.02;
+        _faceY = 0.97 - _faceH;
+      } else if (code == 'BR') {
+        _faceX = 0.98 - _faceW;
+        _faceY = 0.97 - _faceH;
+      }
+    });
+  }
+
+  Future<void> _exportStreamerSplit() async {
+    if (_videoPath == null) return;
+    await _controller?.pause();
+
+    setState(() {
+      _isExporting = true;
+      _exportStatus = '9:16 Facecam + Gameplay render ho raha hai...';
+    });
+
+    try {
+      final hasAccess = await Gal.hasAccess(toAlbum: true);
+      if (!hasAccess) await Gal.requestAccess(toAlbum: true);
+
+      final probe = await probeVideoInfo(_videoPath!);
+      final double clipDur = math.max(1.0, _trimRange.end - _trimRange.start);
+      final int outFps = _use60Fps ? 60 : 30;
+
+      final int topH = ((1280 * _topPanelRatio) / 2).round() * 2;
+      final int botH = 1280 - topH;
+
+      final double safeW = _faceW.clamp(0.15, 0.90);
+      final double safeH = _faceH.clamp(0.15, 0.90);
+      final double safeX = _faceX.clamp(0.0, 0.995 - safeW);
+      final double safeY = _faceY.clamp(0.0, 0.995 - safeH);
+
+      final String topFilter =
+          '[face_in]crop=trunc(iw*${safeW.toStringAsFixed(4)}):trunc(ih*${safeH.toStringAsFixed(4)}):'
+          'trunc(iw*${safeX.toStringAsFixed(4)}):trunc(ih*${safeY.toStringAsFixed(4)}),'
+          'scale=720:$topH:force_original_aspect_ratio=increase,crop=720:$topH,setsar=1[top]';
+
+      final String botFilter = _blurFillGameplay
+          ? '[game_in]split=2[gbg][gfg];'
+              '[gbg]scale=720:$botH:force_original_aspect_ratio=increase,crop=720:$botH,gblur=sigma=18[gbgb];'
+              '[gfg]scale=720:$botH:force_original_aspect_ratio=decrease[gfgs];'
+              '[gbgb][gfgs]overlay=(W-w)/2:(H-h)/2,setsar=1[bot]'
+          : '[game_in]scale=720:$botH:force_original_aspect_ratio=increase,crop=720:$botH,setsar=1[bot]';
+
+      final String filterComplex =
+          '[0:v]split=2[face_in][game_in];'
+          '$topFilter;'
+          '$botFilter;'
+          '[top][bot]vstack=inputs=2,fps=$outFps,format=yuv420p[vout]';
+
+      final tempDir = await getTemporaryDirectory();
+      final outPath = '${tempDir.path}/vcs_streamer_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      final List<String> args = [
+        '-y',
+        '-ss',
+        _trimRange.start.toStringAsFixed(2),
+        '-i',
+        _videoPath!,
+        '-t',
+        clipDur.toStringAsFixed(2),
+        '-filter_complex',
+        filterComplex,
+        '-map',
+        '[vout]',
+      ];
+
+      if (probe.hasAudio) {
+        args.addAll(['-map', '0:a', '-c:a', 'aac', '-b:a', '128k']);
+      } else {
+        args.add('-an');
+      }
+
+      args.addAll([
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-crf',
+        '23',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+        outPath,
+      ]);
+
+      final session = await FFmpegKit.executeWithArguments(args);
+      final rc = await session.getReturnCode();
+
+      if (!ReturnCode.isSuccess(rc) || !File(outPath).existsSync()) {
+        final logs = await session.getOutput();
+        throw Exception(logs?.split('\n').last ?? 'Streamer render failed');
+      }
+
+      await Gal.putVideo(outPath, album: 'Viral Clip Studio');
+      await widget.onExported(outPath);
+
+      if (!mounted) return;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(
+          builder: (_) => ExportSuccessScreen(outputPath: outPath, savedToGallery: true),
+        ),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Streamer Split Error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isExporting = false;
+          _exportStatus = '';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isPlaying = _controller?.value.isPlaying ?? false;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Streamer Split (AI Facecam)'),
+        actions: [
+          if (_isVideoReady)
+            TextButton.icon(
+              onPressed: (_isDetecting || _isExporting) ? null : _autoDetectFacecam,
+              icon: const Icon(Icons.face_retouching_natural, color: AppColors.neonCyan, size: 18),
+              label: const Text('AI Scan', style: TextStyle(color: AppColors.neonCyan)),
+            ),
+        ],
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  _videoName,
+                  style: const TextStyle(color: AppColors.neonCyan, fontWeight: FontWeight.w600, fontSize: 13),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
+                const SizedBox(height: 6),
+                Text(_detectBadge, style: const TextStyle(color: Colors.white70, fontSize: 12)),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: (_isExporting || _isDetecting) ? null : _pickStreamVideo,
+                  icon: const Icon(Icons.video_library_rounded, color: AppColors.neonCyan),
+                  label: Text(_videoPath == null ? 'Select Live Stream / Gameplay Video' : 'Change Video'),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          if (_isVideoReady && _controller != null) ...[
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: AppColors.neonCyan.withValues(alpha: 0.4)),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: AspectRatio(
+                aspectRatio: _controller!.value.aspectRatio,
+                child: LayoutBuilder(
+                  builder: (ctx, box) {
+                    final maxW = box.maxWidth;
+                    final maxH = box.maxHeight;
+                    return Stack(
+                      children: [
+                        Positioned.fill(child: VideoPlayer(_controller!)),
+                        Positioned(
+                          left: _faceX * maxW,
+                          top: _faceY * maxH,
+                          width: _faceW * maxW,
+                          height: _faceH * maxH,
+                          child: GestureDetector(
+                            onPanUpdate: (details) {
+                              setState(() {
+                                _faceX = (_faceX + details.delta.dx / maxW).clamp(0.0, 0.995 - _faceW);
+                                _faceY = (_faceY + details.delta.dy / maxH).clamp(0.0, 0.995 - _faceH);
+                              });
+                            },
+                            child: Container(
+                              decoration: BoxDecoration(
+                                color: AppColors.neonCyan.withValues(alpha: 0.18),
+                                border: Border.all(color: AppColors.neonCyan, width: 2.5),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: const Align(
+                                alignment: Alignment.topLeft,
+                                child: Padding(
+                                  padding: EdgeInsets.all(3),
+                                  child: Text(
+                                    'FACECAM (TOP)',
+                                    style: TextStyle(
+                                      backgroundColor: Colors.black87,
+                                      color: AppColors.neonCyan,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ),
+                        Positioned(
+                          right: 8,
+                          bottom: 8,
+                          child: GestureDetector(
+                            onTap: () => isPlaying ? _controller!.pause() : _controller!.play(),
+                            child: CircleAvatar(
+                              radius: 18,
+                              backgroundColor: Colors.black54,
+                              child: Icon(
+                                isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                color: Colors.white,
+                              ),
+                            ),
+                          ),
+                        ),
+                        if (_isDetecting)
+                          Positioned.fill(
+                            child: Container(
+                              color: Colors.black54,
+                              child: const Center(
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    CircularProgressIndicator(color: AppColors.neonCyan),
+                                    SizedBox(height: 8),
+                                    Text('AI Detecting Facecam...', style: TextStyle(color: AppColors.neonCyan)),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: AppColors.surface,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white10),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Facecam Position (Ya Box ko ungli se drag karo):',
+                      style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 8),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      ActionChip(
+                        avatar: const Icon(Icons.auto_awesome, size: 15, color: AppColors.neonCyan),
+                        label: const Text('Auto AI'),
+                        onPressed: _isDetecting ? null : _autoDetectFacecam,
+                      ),
+                      ActionChip(label: const Text('Top-Left'), onPressed: () => _applyCornerPreset('TL')),
+                      ActionChip(label: const Text('Top-Right'), onPressed: () => _applyCornerPreset('TR')),
+                      ActionChip(label: const Text('Bottom-Left'), onPressed: () => _applyCornerPreset('BL')),
+                      ActionChip(label: const Text('Bottom-Right'), onPressed: () => _applyCornerPreset('BR')),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      const Text('Box Size:', style: TextStyle(fontSize: 12, color: Colors.white70)),
+                      Expanded(
+                        child: Slider(
+                          value: _faceW,
+                          min: 0.18,
+                          max: 0.55,
+                          activeColor: AppColors.neonCyan,
+                          onChanged: (v) {
+                            setState(() {
+                              _faceW = v;
+                              _faceH = (v * 1.15).clamp(0.20, 0.65);
+                              _faceX = _faceX.clamp(0.0, 0.995 - _faceW);
+                              _faceY = _faceY.clamp(0.0, 0.995 - _faceH);
+                            });
+                          },
+                        ),
+                      ),
+                      Text('${(_faceW * 100).round()}%'),
+                    ],
+                  ),
+                  const Divider(color: Colors.white12),
+                  const Text('Clip Range (Highlight Cut):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text('Start: ${formatClock(_trimRange.start)}',
+                          style: const TextStyle(color: AppColors.neonCyan, fontSize: 12)),
+                      Text('Length: ${formatClock(_trimRange.end - _trimRange.start)}',
+                          style: const TextStyle(fontSize: 12)),
+                      Text('End: ${formatClock(_trimRange.end)}',
+                          style: const TextStyle(color: AppColors.neonPink, fontSize: 12)),
+                    ],
+                  ),
+                  RangeSlider(
+                    values: _trimRange,
+                    min: 0,
+                    max: _totalSeconds,
+                    activeColor: AppColors.neonPurple,
+                    onChanged: (vals) {
+                      if (vals.end - vals.start < 1.0) return;
+                      setState(() => _trimRange = vals);
+                      _controller?.seekTo(Duration(milliseconds: (vals.start * 1000).round()));
+                    },
+                  ),
+                  const Divider(color: Colors.white12),
+                  const Text('Upar Facecam ki Height:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    children: [
+                      ChoiceChip(
+                        label: const Text('32% Compact'),
+                        selected: _topPanelRatio == 0.32,
+                        selectedColor: AppColors.neonPurple,
+                        onSelected: (_) => setState(() => _topPanelRatio = 0.32),
+                      ),
+                      ChoiceChip(
+                        label: const Text('38% Pro'),
+                        selected: _topPanelRatio == 0.38,
+                        selectedColor: AppColors.neonPurple,
+                        onSelected: (_) => setState(() => _topPanelRatio = 0.38),
+                      ),
+                      ChoiceChip(
+                        label: const Text('45% Half'),
+                        selected: _topPanelRatio == 0.45,
+                        selectedColor: AppColors.neonPurple,
+                        onSelected: (_) => setState(() => _topPanelRatio = 0.45),
+                      ),
+                    ],
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Full Gameplay HUD + Blur Frame'),
+                    subtitle: const Text('ON = Poora gameplay dikhega • OFF = Center Zoom'),
+                    value: _blurFillGameplay,
+                    activeThumbColor: AppColors.neonCyan,
+                    onChanged: (v) => setState(() => _blurFillGameplay = v),
+                  ),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('60 FPS Smooth Gaming Mode'),
+                    value: _use60Fps,
+                    activeThumbColor: AppColors.neonCyan,
+                    onChanged: (v) => setState(() => _use60Fps = v),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+            if (_isExporting) ...[
+              const LinearProgressIndicator(color: AppColors.neonCyan, backgroundColor: Colors.white12),
+              const SizedBox(height: 8),
+              Text(_exportStatus, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.neonCyan)),
+              const SizedBox(height: 12),
+            ],
+            ElevatedButton.icon(
+              onPressed: (_isExporting || _isDetecting) ? null : _exportStreamerSplit,
+              icon: const Icon(Icons.rocket_launch_rounded),
+              label: Text(
+                _isExporting ? 'Rendering Split-Screen...' : 'Export 9:16 Streamer Short',
+                style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.neonPurple,
+                foregroundColor: Colors.white,
+                padding: const EdgeInsets.symmetric(vertical: 16),
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// 5. AUTO-SPLIT SHORTS SCREEN (Live Video Preview + 9:16 Crop Guide + Part Chips)
+// ============================================================================
+class AutoSplitScreen extends StatefulWidget {
+  final Future<void> Function(String path) onExported;
+
+  const AutoSplitScreen({super.key, required this.onExported});
+
+  @override
+  State<AutoSplitScreen> createState() => _AutoSplitScreenState();
+}
+
+class _AutoSplitScreenState extends State<AutoSplitScreen> {
+  String? _videoPath;
+  String _videoName = 'Koi video select nahi hai';
+  VideoPlayerController? _controller;
+  bool _isVideoReady = false;
+  double _totalSec = 0.0;
+
+  int _chunkSec = 30;
+  bool _crop9x16 = true;
+  List<List<double>> _segments = [];
+  int _selectedPartIdx = 0;
+
+  bool _isProcessing = false;
+  int _exportingPartIdx = -1;
+  String _status = '';
+
+  @override
+  void dispose() {
+    _controller?.dispose();
+    super.dispose();
+  }
+
+  void _rebuildSegments() {
+    if (_totalSec <= 0) {
+      _segments = [];
+      return;
+    }
+    final list = <List<double>>[];
+    double start = 0.0;
+    while (start < _totalSec) {
+      double end = start + _chunkSec;
+      if (end > _totalSec) end = _totalSec;
+      if ((end - start) < 2.0 && list.isNotEmpty) break;
+      list.add([start, end]);
+      start = end;
+    }
+    _segments = list;
+    _selectedPartIdx = 0;
+  }
+
+  Future<void> _pickVideo() async {
+    final res = await FilePicker.platform.pickFiles(type: FileType.video);
+    if (res == null || res.files.single.path == null) return;
+
+    await _controller?.dispose();
+    final path = res.files.single.path!;
+    final name = res.files.single.name;
+
+    setState(() {
+      _videoPath = path;
+      _videoName = name;
+      _isVideoReady = false;
+      _controller = null;
+    });
+
+    final ctrl = VideoPlayerController.file(File(path));
+    await ctrl.initialize();
+    ctrl.addListener(() {
+      if (mounted) setState(() {});
+    });
+
+    final totalSec = ctrl.value.duration.inMilliseconds / 1000.0;
+    if (!mounted) {
+      await ctrl.dispose();
+      return;
+    }
+
+    setState(() {
+      _controller = ctrl;
+      _isVideoReady = true;
+      _totalSec = totalSec > 0 ? totalSec : 1.0;
+      _rebuildSegments();
+    });
+  }
+
+  Future<void> _previewPart(int index) async {
+    if (index < 0 || index >= _segments.length || _controller == null) return;
+    setState(() => _selectedPartIdx = index);
+    await _controller!.seekTo(Duration(milliseconds: (_segments[index][0] * 1000).round()));
+    await _controller!.play();
+  }
+
+  Future<void> _runSplit() async {
+    if (_videoPath == null || _segments.isEmpty) return;
+    await _controller?.pause();
+
+    setState(() {
+      _isProcessing = true;
+      _exportingPartIdx = 0;
+      _status = 'Video check ho raha hai...';
+    });
+
+    try {
+      final hasAccess = await Gal.hasAccess(toAlbum: true);
+      if (!hasAccess) await Gal.requestAccess(toAlbum: true);
+
+      final probe = await probeVideoInfo(_videoPath!);
+      final tempDir = await getTemporaryDirectory();
+      int saved = 0;
+
+      for (int i = 0; i < _segments.length; i++) {
+        if (!mounted) return;
+        final double st = _segments[i][0];
+        final double dur = math.max(0.5, _segments[i][1] - st);
+
+        setState(() {
+          _exportingPartIdx = i;
+          _selectedPartIdx = i;
+          _status =
+              'Part ${i + 1} / ${_segments.length} (${formatClock(st)} - ${formatClock(_segments[i][1])}) export ho raha hai...';
+        });
+
+        await _controller?.seekTo(Duration(milliseconds: (st * 1000).round()));
+
+        final outPath = '${tempDir.path}/vcs_part${i + 1}_${DateTime.now().millisecondsSinceEpoch}.mp4';
+        final List<String> vf = [];
+        if (_crop9x16) {
+          vf.add(r'crop=min(iw\,ih*9/16):min(ih\,iw*16/9)');
+          vf.add(r'scale=if(gte(iw\,ih)\,-2\,min(iw\,720)):if(gte(iw\,ih)\,min(ih\,720)\,-2)');
+        }
+        vf.add('scale=trunc(iw/2)*2:trunc(ih/2)*2');
+
+        final List<String> args = [
+          '-y',
+          '-ss',
+          st.toStringAsFixed(2),
+          '-i',
+          _videoPath!,
+          '-t',
+          dur.toStringAsFixed(2),
+          '-vf',
+          vf.join(','),
+        ];
+
+        if (probe.hasAudio) {
+          args.addAll(['-c:a', 'aac', '-b:a', '128k']);
+        } else {
+          args.add('-an');
+        }
+
+        args.addAll([
+          '-c:v',
+          'libx264',
+          '-preset',
+          'ultrafast',
+          '-crf',
+          '23',
+          '-pix_fmt',
+          'yuv420p',
+          '-movflags',
+          '+faststart',
+          outPath,
+        ]);
+
+        final session = await FFmpegKit.executeWithArguments(args);
+        final rc = await session.getReturnCode();
+        if (ReturnCode.isSuccess(rc) && File(outPath).existsSync()) {
+          await Gal.putVideo(outPath, album: 'Viral Clip Studio');
+          await widget.onExported(outPath);
+          saved++;
+        }
+      }
+
+      if (!mounted) return;
+      if (saved > 0) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$saved / ${_segments.length} parts Gallery -> Viral Clip Studio mein save ho gaye! ✅'),
+            backgroundColor: Colors.green.shade700,
+          ),
+        );
+      } else {
+        throw Exception('Koi bhi part export nahi ho paya');
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Auto-Split Error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _exportingPartIdx = -1;
+          _status = '';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isPlaying = _controller?.value.isPlaying ?? false;
+    final posSec = (_controller?.value.position.inMilliseconds ?? 0) / 1000.0;
+
+    return Scaffold(
+      appBar: AppBar(title: const Text('Auto-Split Shorts (Live Preview)')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (_isVideoReady && _controller != null) ...[
+            Container(
+              decoration: BoxDecoration(
+                color: Colors.black,
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: Colors.white12),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: AspectRatio(
+                aspectRatio: _controller!.value.aspectRatio,
+                child: LayoutBuilder(
+                  builder: (ctx, box) {
+                    final maxW = box.maxWidth;
+                    final maxH = box.maxHeight;
+                    final double cropW = math.min(maxW, maxH * (9.0 / 16.0));
+                    final double cropH = math.min(maxH, maxW * (16.0 / 9.0));
+                    final double sidePad = (maxW - cropW) / 2.0;
+                    final double topPad = (maxH - cropH) / 2.0;
+
+                    return Stack(
+                      children: [
+                        Positioned.fill(child: VideoPlayer(_controller!)),
+                        if (_crop9x16) ...[
+                          if (sidePad > 1) ...[
+                            Positioned(
+                                left: 0, top: 0, bottom: 0, width: sidePad, child: Container(color: Colors.black54)),
+                            Positioned(
+                                right: 0, top: 0, bottom: 0, width: sidePad, child: Container(color: Colors.black54)),
+                          ],
+                          if (topPad > 1) ...[
+                            Positioned(
+                                left: 0, right: 0, top: 0, height: topPad, child: Container(color: Colors.black54)),
+                            Positioned(
+                                left: 0, right: 0, bottom: 0, height: topPad, child: Container(color: Colors.black54)),
+                          ],
+                          Positioned(
+                            left: sidePad,
+                            top: topPad,
+                            width: cropW,
+                            height: cropH,
+                            child: Container(
+                              decoration: BoxDecoration(border: Border.all(color: AppColors.neonCyan, width: 2)),
+                              child: const Align(
+                                alignment: Alignment.topCenter,
+                                child: Padding(
+                                  padding: EdgeInsets.only(top: 4),
+                                  child: Text(
+                                    '9:16 CLIP AREA',
+                                    style: TextStyle(
+                                      backgroundColor: Colors.black87,
+                                      color: AppColors.neonCyan,
+                                      fontSize: 9,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                        Positioned(
+                          left: 8,
+                          bottom: 8,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                            decoration: BoxDecoration(color: Colors.black87, borderRadius: BorderRadius.circular(8)),
+                            child: Text('${formatClock(posSec)} / ${formatClock(_totalSec)}',
+                                style: const TextStyle(fontSize: 11, color: Colors.white)),
+                          ),
+                        ),
+                        Positioned(
+                          right: 8,
+                          bottom: 8,
+                          child: GestureDetector(
+                            onTap: () => isPlaying ? _controller!.pause() : _controller!.play(),
+                            child: CircleAvatar(
+                              radius: 18,
+                              backgroundColor: Colors.black54,
+                              child: Icon(isPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                  color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            if (_segments.isNotEmpty) ...[
+              Text(
+                'Total ${_segments.length} Parts Banenge (Tap karke preview dekho):',
+                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                height: 44,
+                child: ListView.builder(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _segments.length,
+                  itemBuilder: (ctx, i) {
+                    final isExp = _exportingPartIdx == i;
+                    final isSel = _selectedPartIdx == i;
+                    return Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text('Part ${i + 1} (${formatClock(_segments[i][0])})',
+                            style: const TextStyle(fontSize: 12)),
+                        selected: isSel,
+                        selectedColor: isExp ? Colors.green : AppColors.neonPurple,
+                        onSelected: _isProcessing ? null : (_) => _previewPart(i),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+          ],
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const Text('Long Video -> Multiple Shorts Parts',
+                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                const SizedBox(height: 6),
+                Text(_videoName,
+                    style: const TextStyle(color: AppColors.neonCyan, fontSize: 13),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: _isProcessing ? null : _pickVideo,
+                  icon: const Icon(Icons.video_library_rounded),
+                  label: Text(_videoPath == null ? 'Select Long Video' : 'Change Video'),
+                ),
+                const SizedBox(height: 16),
+                const Text('Har Part ki Length:', style: TextStyle(fontWeight: FontWeight.w600)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: [15, 30, 45, 60].map((sec) {
+                    return ChoiceChip(
+                      label: Text('${sec}s'),
+                      selected: _chunkSec == sec,
+                      selectedColor: AppColors.neonPurple,
+                      onSelected: _isProcessing
+                          ? null
+                          : (_) => setState(() {
+                                _chunkSec = sec;
+                                _rebuildSegments();
+                              }),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 6),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('9:16 Vertical Shorts Crop'),
+                  subtitle: const Text('Cyan box wala area Shorts mein crop hoga'),
+                  value: _crop9x16,
+                  activeThumbColor: AppColors.neonCyan,
+                  onChanged: _isProcessing ? null : (v) => setState(() => _crop9x16 = v),
+                ),
+                const SizedBox(height: 12),
+                if (_isProcessing) ...[
+                  const LinearProgressIndicator(color: AppColors.neonCyan, backgroundColor: Colors.white12),
+                  const SizedBox(height: 8),
+                  Text(_status,
+                      textAlign: TextAlign.center, style: const TextStyle(color: AppColors.neonCyan, fontSize: 12)),
+                  const SizedBox(height: 12),
+                ],
+                ElevatedButton.icon(
+                  onPressed: (_isProcessing || _videoPath == null || _segments.isEmpty) ? null : _runSplit,
+                  icon: const Icon(Icons.content_cut_rounded),
+                  label: Text(
+                    _isProcessing
+                        ? 'Exporting Parts...'
+                        : 'Auto-Split & Save ${_segments.isEmpty ? "All" : _segments.length} Parts',
+                    style: const TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.neonBlue,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// 6. CRASH-PROOF FFMPEG MULTI-CLIP MERGER SCREEN
+// ============================================================================
+class MultiClipMergerScreen extends StatefulWidget {
+  final Future<void> Function(String path) onExported;
+
+  const MultiClipMergerScreen({super.key, required this.onExported});
+
+  @override
+  State<MultiClipMergerScreen> createState() => _MultiClipMergerScreenState();
+}
+
+class _MultiClipMergerScreenState extends State<MultiClipMergerScreen> {
+  final List<String> _paths = [];
+  final List<String> _names = [];
+  String _outputAspect = '9:16';
+  bool _isProcessing = false;
+  String _status = '';
+
+  Future<void> _pickVideos() async {
+    final res = await FilePicker.platform.pickFiles(type: FileType.video, allowMultiple: true);
+    if (res == null) return;
+    setState(() {
+      for (final f in res.files) {
+        if (f.path != null) {
+          _paths.add(f.path!);
+          _names.add(f.name);
+        }
+      }
+    });
+  }
+
+  Future<void> _mergeWithFfmpeg() async {
+    if (_paths.length < 2) return;
+    setState(() {
+      _isProcessing = true;
+      _status = 'Videos analyze ho rahe hain...';
+    });
+
+    try {
+      final hasAccess = await Gal.hasAccess(toAlbum: true);
+      if (!hasAccess) await Gal.requestAccess(toAlbum: true);
+
+      final probes = <VideoProbeResult>[];
+      bool anyHasAudio = false;
+      for (int i = 0; i < _paths.length; i++) {
+        if (mounted) setState(() => _status = 'Checking clip ${i + 1} / ${_paths.length}...');
+        final info = await probeVideoInfo(_paths[i]);
+        probes.add(info);
+        if (info.hasAudio) anyHasAudio = true;
+      }
+
+      final int w = _outputAspect == '9:16' ? 720 : (_outputAspect == '1:1' ? 720 : 1280);
+      final int h = _outputAspect == '9:16' ? 1280 : (_outputAspect == '1:1' ? 720 : 720);
+
+      final List<String> args = ['-y'];
+      for (final p in _paths) {
+        args.addAll(['-i', p]);
+      }
+
+      final List<String> filters = [];
+      final StringBuffer concatInputs = StringBuffer();
+
+      for (int i = 0; i < _paths.length; i++) {
+        filters.add(
+          '[$i:v]scale=$w:$h:force_original_aspect_ratio=decrease,'
+          'pad=$w:$h:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=30,setpts=PTS-STARTPTS,format=yuv420p[v$i]',
+        );
+        if (anyHasAudio) {
+          if (probes[i].hasAudio) {
+            filters.add(
+              '[$i:a]aformat=sample_rates=44100:channel_layouts=stereo,aresample=async=1,asetpts=PTS-STARTPTS[a$i]',
+            );
+          } else {
+            filters.add(
+              'anullsrc=channel_layout=stereo:sample_rate=44100,atrim=duration=${probes[i].durationSec.toStringAsFixed(2)},asetpts=PTS-STARTPTS[a$i]',
+            );
+          }
+          concatInputs.write('[v$i][a$i]');
+        } else {
+          concatInputs.write('[v$i]');
+        }
+      }
+
+      if (anyHasAudio) {
+        filters.add('${concatInputs}concat=n=${_paths.length}:v=1:a=1[vout][aout]');
+      } else {
+        filters.add('${concatInputs}concat=n=${_paths.length}:v=1:a=0[vout]');
+      }
+
+      final tempDir = await getTemporaryDirectory();
+      final outPath = '${tempDir.path}/vcs_merged_${DateTime.now().millisecondsSinceEpoch}.mp4';
+
+      args.addAll(['-filter_complex', filters.join(';'), '-map', '[vout]']);
+      if (anyHasAudio) {
+        args.addAll(['-map', '[aout]', '-c:a', 'aac', '-b:a', '128k']);
+      } else {
+        args.add('-an');
+      }
+      args.addAll([
+        '-c:v',
+        'libx264',
+        '-preset',
+        'ultrafast',
+        '-crf',
+        '23',
+        '-pix_fmt',
+        'yuv420p',
+        '-movflags',
+        '+faststart',
+        outPath,
+      ]);
+
+      if (mounted) setState(() => _status = '${_paths.length} clips safely merge ho rahe hain...');
+
+      final session = await FFmpegKit.executeWithArguments(args);
+      final rc = await session.getReturnCode();
+
+      if (!ReturnCode.isSuccess(rc) || !File(outPath).existsSync()) {
+        final logs = await session.getOutput();
+        throw Exception(logs?.split('\n').last ?? 'Merge failed');
+      }
+
+      await Gal.putVideo(outPath, album: 'Viral Clip Studio');
+      await widget.onExported(outPath);
+
+      if (!mounted) return;
+      await Navigator.of(context).pushReplacement(
+        MaterialPageRoute(builder: (_) => ExportSuccessScreen(outputPath: outPath, savedToGallery: true)),
+      );
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Merge error: $e'), backgroundColor: Colors.redAccent),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isProcessing = false;
+          _status = '';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(title: const Text('Multi-Clip Merger (Crash-Proof)')),
+      body: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: AppColors.surface,
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: Colors.white10),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text('Selected Clips (${_paths.length})',
+                        style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                    if (_paths.isNotEmpty)
+                      TextButton(
+                        onPressed: _isProcessing
+                            ? null
+                            : () => setState(() {
+                                  _paths.clear();
+                                  _names.clear();
+                                }),
+                        child: const Text('Clear All', style: TextStyle(color: Colors.redAccent)),
+                      ),
+                  ],
+                ),
+                const Text('Kisi bhi resolution ya FPS ke videos bina crash ke ek saath jodein.',
+                    style: TextStyle(color: Colors.white60, fontSize: 12)),
+                const SizedBox(height: 12),
+                if (_names.isNotEmpty)
+                  ..._names.asMap().entries.map(
+                        (e) => Container(
+                          margin: const EdgeInsets.only(bottom: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                          decoration: BoxDecoration(
+                            color: Colors.white.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                child: Text('${e.key + 1}. ${e.value}',
+                                    style: const TextStyle(color: AppColors.neonCyan, fontSize: 13),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis),
+                              ),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                icon: const Icon(Icons.close, size: 18, color: Colors.redAccent),
+                                onPressed: _isProcessing
+                                    ? null
+                                    : () => setState(() {
+                                          _paths.removeAt(e.key);
+                                          _names.removeAt(e.key);
+                                        }),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: _isProcessing ? null : _pickVideos,
+                  icon: const Icon(Icons.playlist_add_rounded),
+                  label: Text(_paths.isEmpty ? 'Select 2 or More Videos' : 'Add More Videos'),
+                ),
+                const SizedBox(height: 14),
+                const Text('Output Video Size:', style: TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  children: ['9:16', '16:9', '1:1'].map((r) {
+                    return ChoiceChip(
+                      label: Text(r == '9:16' ? '9:16 Shorts' : (r == '16:9' ? '16:9 YouTube' : '1:1 Square')),
+                      selected: _outputAspect == r,
+                      selectedColor: AppColors.neonPurple,
+                      onSelected: _isProcessing ? null : (_) => setState(() => _outputAspect = r),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 16),
+                if (_isProcessing) ...[
+                  const LinearProgressIndicator(color: AppColors.neonPink, backgroundColor: Colors.white12),
+                  const SizedBox(height: 8),
+                  Text(_status,
+                      textAlign: TextAlign.center, style: const TextStyle(color: AppColors.neonCyan, fontSize: 12)),
+                  const SizedBox(height: 12),
+                ],
+                ElevatedButton.icon(
+                  onPressed: (_isProcessing || _paths.length < 2) ? null : _mergeWithFfmpeg,
+                  icon: const Icon(Icons.merge_type_rounded),
+                  label: Text(_isProcessing ? 'Merging...' : 'Merge & Save to Gallery'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.neonPurple,
+                    foregroundColor: Colors.white,
+                    padding: const EdgeInsets.symmetric(vertical: 15),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ============================================================================
+// 7. EFFECTS GALLERY SCREEN (14 Effects incl. Gaming Category)
 // ============================================================================
 class EffectsGalleryScreen extends StatefulWidget {
   final ValueChanged<String> onApplyEffect;
@@ -1488,7 +3842,7 @@ class _EffectsGalleryScreenState extends State<EffectsGalleryScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final cats = ['All', 'Trending', 'Cinematic', 'Retro', 'Basic'];
+    final cats = ['All', 'Gaming', 'Trending', 'Cinematic', 'Retro', 'Basic'];
     final items = kStudioEffects.where((e) {
       if (e.id == 'none') return false;
       if (_selectedCat == 'All') return true;
@@ -1496,7 +3850,7 @@ class _EffectsGalleryScreenState extends State<EffectsGalleryScreen> {
     }).toList();
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Premium Effects Studio')),
+      appBar: AppBar(title: const Text('Premium Effects Studio (14)')),
       body: Column(
         children: [
           SingleChildScrollView(
@@ -1541,10 +3895,7 @@ class _EffectsGalleryScreenState extends State<EffectsGalleryScreen> {
                       gradient: LinearGradient(
                         begin: Alignment.topLeft,
                         end: Alignment.bottomRight,
-                        colors: [
-                          fx.accent.withValues(alpha: 0.35),
-                          AppColors.surface,
-                        ],
+                        colors: [fx.accent.withValues(alpha: 0.35), AppColors.surface],
                       ),
                       border: Border.all(color: fx.accent.withValues(alpha: 0.6)),
                     ),
@@ -1578,10 +3929,8 @@ class _EffectsGalleryScreenState extends State<EffectsGalleryScreen> {
                           children: [
                             Text(fx.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
                             const SizedBox(height: 2),
-                            const Text(
-                              'Tap to apply on video →',
-                              style: TextStyle(fontSize: 11, color: Colors.white70),
-                            ),
+                            const Text('Tap to apply on video →',
+                                style: TextStyle(fontSize: 11, color: Colors.white70)),
                           ],
                         ),
                       ],
@@ -1598,7 +3947,7 @@ class _EffectsGalleryScreenState extends State<EffectsGalleryScreen> {
 }
 
 // ============================================================================
-// 4. BUILT-IN MUSIC PACKS LIBRARY (Download, Preview & Pick)
+// 8. BUILT-IN MUSIC PACKS LIBRARY
 // ============================================================================
 class SelectedMusicResult {
   final String path;
@@ -1691,10 +4040,7 @@ class _StudioMusicLibraryScreenState extends State<StudioMusicLibraryScreen> {
     if (res != null && res.files.single.path != null && mounted) {
       Navigator.pop(
         context,
-        SelectedMusicResult(
-          path: res.files.single.path!,
-          title: res.files.single.name,
-        ),
+        SelectedMusicResult(path: res.files.single.path!, title: res.files.single.name),
       );
     }
   }
@@ -1710,11 +4056,7 @@ class _StudioMusicLibraryScreenState extends State<StudioMusicLibraryScreen> {
             TextButton.icon(
               onPressed: _downloadingAll ? null : _downloadAllPacks,
               icon: _downloadingAll
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
+                  ? const SizedBox(width: 14, height: 14, child: CircularProgressIndicator(strokeWidth: 2))
                   : const Icon(Icons.download_rounded, color: AppColors.neonCyan, size: 18),
               label: const Text('Get All', style: TextStyle(color: AppColors.neonCyan)),
             ),
@@ -1752,20 +4094,14 @@ class _StudioMusicLibraryScreenState extends State<StudioMusicLibraryScreen> {
               decoration: BoxDecoration(
                 color: AppColors.surface,
                 borderRadius: BorderRadius.circular(14),
-                border: Border.all(
-                  color: isPlaying ? AppColors.neonCyan : Colors.white10,
-                ),
+                border: Border.all(color: isPlaying ? AppColors.neonCyan : Colors.white10),
               ),
               child: Row(
                 children: [
                   IconButton(
                     onPressed: isBusy ? null : () => _togglePlay(track),
                     icon: isBusy
-                        ? const SizedBox(
-                            width: 22,
-                            height: 22,
-                            child: CircularProgressIndicator(strokeWidth: 2),
-                          )
+                        ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
                         : Icon(
                             isPlaying ? Icons.stop_circle_rounded : Icons.play_circle_fill_rounded,
                             color: track.color,
@@ -1781,10 +4117,7 @@ class _StudioMusicLibraryScreenState extends State<StudioMusicLibraryScreen> {
                         const SizedBox(height: 2),
                         Text(
                           '${track.mood}  •  ${track.bpm} BPM  •  ${isReady ? "Ready Offline ✓" : "Tap to Download"}',
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: isReady ? Colors.greenAccent : Colors.white54,
-                          ),
+                          style: TextStyle(fontSize: 11, color: isReady ? Colors.greenAccent : Colors.white54),
                         ),
                       ],
                     ),
@@ -1797,10 +4130,7 @@ class _StudioMusicLibraryScreenState extends State<StudioMusicLibraryScreen> {
                               await _player.stop();
                               final path = await _downloadOne(track);
                               if (!context.mounted) return;
-                              Navigator.pop(
-                                context,
-                                SelectedMusicResult(path: path, title: track.title),
-                              );
+                              Navigator.pop(context, SelectedMusicResult(path: path, title: track.title));
                             },
                       style: ElevatedButton.styleFrom(
                         backgroundColor: AppColors.neonPurple,
@@ -1828,7 +4158,7 @@ class _StudioMusicLibraryScreenState extends State<StudioMusicLibraryScreen> {
 }
 
 // ============================================================================
-// 5. ONE-CLICK PHOTO-TO-VIDEO STUDIO (Premium Transitions + Blur Fill + Music)
+// 9. ONE-CLICK PHOTO-TO-VIDEO STUDIO
 // ============================================================================
 class PhotoToVideoStudioScreen extends StatefulWidget {
   final String? initialTransitionId;
@@ -1849,7 +4179,7 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
   late TransitionPreset _selectedTransition;
   VideoEffectPreset _selectedEffect = kStudioEffects.first;
   double _photoDurationSec = 3.0;
-  String _aspectRatio = '9:16'; // 9:16, 1:1, 16:9
+  String _aspectRatio = '9:16';
   bool _blurBackgroundFrame = true;
   String? _musicPath;
   String _musicTitle = 'Auto: Lo-Fi Chill (Tap to change)';
@@ -1868,24 +4198,17 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
   }
 
   Future<void> _pickPhotos() async {
-    final res = await FilePicker.platform.pickFiles(
-      type: FileType.image,
-      allowMultiple: true,
-    );
+    final res = await FilePicker.platform.pickFiles(type: FileType.image, allowMultiple: true);
     if (res == null) return;
     final picked = res.files.where((f) => f.path != null).map((f) => f.path!).toList();
     if (picked.isNotEmpty) {
-      setState(() {
-        _photoPaths = [..._photoPaths, ...picked].take(15).toList();
-      });
+      setState(() => _photoPaths = [..._photoPaths, ...picked].take(15).toList());
     }
   }
 
   Future<void> _pickMusic() async {
     final res = await Navigator.of(context).push<SelectedMusicResult>(
-      MaterialPageRoute(
-        builder: (_) => const StudioMusicLibraryScreen(pickerMode: true),
-      ),
+      MaterialPageRoute(builder: (_) => const StudioMusicLibraryScreen(pickerMode: true)),
     );
     if (res != null) {
       setState(() {
@@ -1916,7 +4239,6 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
       final hasAccess = await Gal.hasAccess(toAlbum: true);
       if (!hasAccess) await Gal.requestAccess(toAlbum: true);
 
-      // Default built-in music auto-download if user kept music ON
       String? activeMusicPath = _musicPath;
       if (_useMusic && activeMusicPath == null) {
         activeMusicPath = await StudioMusicPackManager.ensureDownloaded(kBuiltInMusicTracks.first);
@@ -1953,7 +4275,6 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
         }
       }
 
-      // Chain premium xfade transitions
       final tList = _selectedTransition.xfadeNames;
       for (int k = 1; k < n; k++) {
         final String prevLabel = k == 1 ? 'v0' : 'xf${k - 1}';
@@ -2018,9 +4339,7 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
 
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => ExportSuccessScreen(outputPath: outPath, savedToGallery: true),
-        ),
+        MaterialPageRoute(builder: (_) => ExportSuccessScreen(outputPath: outPath, savedToGallery: true)),
       );
     } catch (e) {
       if (mounted) {
@@ -2045,7 +4364,6 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          // 1. Photo Selection Strip
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -2059,10 +4377,8 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Photos Selected (${_photoPaths.length} / 15)',
-                      style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
-                    ),
+                    Text('Photos Selected (${_photoPaths.length} / 15)',
+                        style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
                     if (_photoPaths.isNotEmpty)
                       TextButton(
                         onPressed: _isRendering ? null : () => setState(() => _photoPaths.clear()),
@@ -2116,8 +4432,6 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
             ),
           ),
           const SizedBox(height: 16),
-
-          // 2. Premium Transition Style Picker
           const Text('Premium Transitions (1-Click):', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
           const SizedBox(height: 8),
           SizedBox(
@@ -2144,12 +4458,10 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
                       children: [
                         Icon(tr.icon, color: tr.color, size: 24),
                         const SizedBox(height: 6),
-                        Text(
-                          tr.name,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-                        ),
+                        Text(tr.name,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                         Text(tr.tag, style: const TextStyle(fontSize: 10, color: Colors.white60)),
                       ],
                     ),
@@ -2159,8 +4471,6 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
             ),
           ),
           const SizedBox(height: 16),
-
-          // 3. Filter Overlay on Photos
           const Text('Color Effect Overlay:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 15)),
           const SizedBox(height: 8),
           SizedBox(
@@ -2184,8 +4494,6 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
             ),
           ),
           const SizedBox(height: 16),
-
-          // 4. Layout, Duration & Music
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
@@ -2264,14 +4572,12 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
             ),
           ),
           const SizedBox(height: 20),
-
           if (_isRendering) ...[
             const LinearProgressIndicator(color: AppColors.neonPink, backgroundColor: Colors.white12),
             const SizedBox(height: 8),
             Text(_renderStatus, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.neonCyan)),
             const SizedBox(height: 12),
           ],
-
           ElevatedButton.icon(
             onPressed: _isRendering ? null : _generatePhotoVideo,
             icon: const Icon(Icons.rocket_launch_rounded),
@@ -2293,7 +4599,7 @@ class _PhotoToVideoStudioScreenState extends State<PhotoToVideoStudioScreen> {
 }
 
 // ============================================================================
-// 6. VIDEO STUDIO EDITOR SCREEN (Live Effects Preview + Music + All Tools)
+// 10. VIDEO STUDIO EDITOR SCREEN
 // ============================================================================
 class VideoStudioEditorScreen extends StatefulWidget {
   final String videoPath;
@@ -2319,7 +4625,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
   double _totalSeconds = 1.0;
   RangeValues _trimRange = const RangeValues(0, 1);
 
-  int _activeTool = 0; // 0:Trim, 1:Crop, 2:Speed, 3:Rotate, 4:Music/Audio, 5:Effects
+  int _activeTool = 0;
   String _selectedRatio = 'Original';
   double _selectedSpeed = 1.0;
   int _rotationDeg = 0;
@@ -2371,13 +4677,6 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
     super.dispose();
   }
 
-  String _formatTime(double seconds) {
-    final d = Duration(milliseconds: (seconds * 1000).round());
-    final m = d.inMinutes.remainder(60).toString().padLeft(2, '0');
-    final s = d.inSeconds.remainder(60).toString().padLeft(2, '0');
-    return '$m:$s';
-  }
-
   void _resetAll() {
     setState(() {
       _trimRange = RangeValues(0, _totalSeconds);
@@ -2399,9 +4698,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
     await _controller?.pause();
     if (!mounted) return;
     final res = await Navigator.of(context).push<SelectedMusicResult>(
-      MaterialPageRoute(
-        builder: (_) => const StudioMusicLibraryScreen(pickerMode: true),
-      ),
+      MaterialPageRoute(builder: (_) => const StudioMusicLibraryScreen(pickerMode: true)),
     );
     if (res != null && mounted) {
       setState(() {
@@ -2470,19 +4767,17 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
 
   Widget _buildToolControls() {
     switch (_activeTool) {
-      case 0: // Trim
+      case 0:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text('Start: ${_formatTime(_trimRange.start)}', style: const TextStyle(color: AppColors.neonCyan)),
-                Text(
-                  'Clip: ${_formatTime(_trimRange.end - _trimRange.start)}',
-                  style: const TextStyle(fontWeight: FontWeight.bold),
-                ),
-                Text('End: ${_formatTime(_trimRange.end)}', style: const TextStyle(color: AppColors.neonPink)),
+                Text('Start: ${formatClock(_trimRange.start)}', style: const TextStyle(color: AppColors.neonCyan)),
+                Text('Clip: ${formatClock(_trimRange.end - _trimRange.start)}',
+                    style: const TextStyle(fontWeight: FontWeight.bold)),
+                Text('End: ${formatClock(_trimRange.end)}', style: const TextStyle(color: AppColors.neonPink)),
               ],
             ),
             RangeSlider(
@@ -2500,7 +4795,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
           ],
         );
 
-      case 1: // Crop
+      case 1:
         return Wrap(
           spacing: 10,
           children: ['Original', '9:16', '1:1', '16:9'].map((r) {
@@ -2513,7 +4808,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
           }).toList(),
         );
 
-      case 2: // Speed
+      case 2:
         return Wrap(
           spacing: 8,
           children: [0.5, 0.75, 1.0, 1.25, 1.5, 2.0].map((s) {
@@ -2529,7 +4824,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
           }).toList(),
         );
 
-      case 3: // Rotate & Flip
+      case 3:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
@@ -2559,7 +4854,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
           ],
         );
 
-      case 4: // Audio & Background Music
+      case 4:
         return Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
@@ -2569,10 +4864,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
                   child: OutlinedButton.icon(
                     onPressed: _pickMusicForVideo,
                     icon: const Icon(Icons.music_note_rounded, color: AppColors.neonPink, size: 18),
-                    label: Text(
-                      _bgMusicTitle ?? 'Add Built-In Music / MP3',
-                      overflow: TextOverflow.ellipsis,
-                    ),
+                    label: Text(_bgMusicTitle ?? 'Add Built-In Music / MP3', overflow: TextOverflow.ellipsis),
                   ),
                 ),
                 if (_bgMusicPath != null)
@@ -2618,7 +4910,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
           ],
         );
 
-      case 5: // Effects (Live Preview)
+      case 5:
       default:
         return SizedBox(
           height: 76,
@@ -2644,12 +4936,10 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
                     children: [
                       Icon(fx.icon, color: fx.accent, size: 22),
                       const SizedBox(height: 4),
-                      Text(
-                        fx.name,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-                      ),
+                      Text(fx.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w600)),
                     ],
                   ),
                 ),
@@ -2699,7 +4989,6 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
       ),
       body: Column(
         children: [
-          // Live Preview Viewport
           Expanded(
             flex: 5,
             child: Container(
@@ -2756,17 +5045,13 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
                   : const Center(child: CircularProgressIndicator()),
             ),
           ),
-
-          // Playback & Active Edits Bar
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
-                Text(
-                  '${_formatTime(posSec)} / ${_formatTime(_totalSeconds)}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
+                Text('${formatClock(posSec)} / ${formatClock(_totalSeconds)}',
+                    style: const TextStyle(color: Colors.white70, fontSize: 12)),
                 Row(
                   children: [
                     IconButton(
@@ -2789,8 +5074,6 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
               ],
             ),
           ),
-
-          // Multi-Track Timeline Strip
           Container(
             margin: const EdgeInsets.symmetric(horizontal: 14),
             padding: const EdgeInsets.all(8),
@@ -2839,8 +5122,6 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
             ),
           ),
           const SizedBox(height: 8),
-
-          // Active Tool Controls
           Container(
             width: double.infinity,
             margin: const EdgeInsets.symmetric(horizontal: 14),
@@ -2852,8 +5133,6 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
             child: _buildToolControls(),
           ),
           const SizedBox(height: 8),
-
-          // Bottom Editor Toolbar (6 Active Tools)
           Container(
             color: AppColors.surface,
             padding: const EdgeInsets.symmetric(vertical: 8),
@@ -2902,7 +5181,7 @@ class _VideoStudioEditorScreenState extends State<VideoStudioEditorScreen> {
 }
 
 // ============================================================================
-// 7. UNIFIED FFMPEG EXPORT SCREEN & SUCCESS SCREEN
+// 11. UNIFIED FFMPEG EXPORT SCREEN (Now with 60 FPS Smooth Gaming Mode)
 // ============================================================================
 class ExportConfigScreen extends StatefulWidget {
   final String videoPath;
@@ -2948,6 +5227,7 @@ class ExportConfigScreen extends StatefulWidget {
 
 class _ExportConfigScreenState extends State<ExportConfigScreen> {
   late String _resolution;
+  bool _use60Fps = false;
   bool _saveToGallery = true;
   bool _isExporting = false;
   String _statusText = '';
@@ -2961,7 +5241,7 @@ class _ExportConfigScreenState extends State<ExportConfigScreen> {
   Future<void> _startExport() async {
     setState(() {
       _isExporting = true;
-      _statusText = 'FFmpeg Studio rendering video...';
+      _statusText = 'FFmpeg Studio rendering ${_use60Fps ? "60 FPS " : ""}video...';
     });
 
     try {
@@ -3013,6 +5293,10 @@ class _ExportConfigScreenState extends State<ExportConfigScreen> {
         vf.add(r'scale=if(gte(iw\,ih)\,-2\,min(iw\,1080)):if(gte(iw\,ih)\,min(ih\,1080)\,-2)');
       }
       vf.add('scale=trunc(iw/2)*2:trunc(ih/2)*2');
+
+      if (_use60Fps) {
+        vf.add('fps=60');
+      }
 
       final tempDir = await getTemporaryDirectory();
       final outPath = '${tempDir.path}/vcs_edit_${DateTime.now().millisecondsSinceEpoch}.mp4';
@@ -3097,10 +5381,7 @@ class _ExportConfigScreenState extends State<ExportConfigScreen> {
       if (!mounted) return;
       await Navigator.of(context).pushReplacement(
         MaterialPageRoute(
-          builder: (_) => ExportSuccessScreen(
-            outputPath: outPath,
-            savedToGallery: _saveToGallery,
-          ),
+          builder: (_) => ExportSuccessScreen(outputPath: outPath, savedToGallery: _saveToGallery),
         ),
       );
     } catch (e) {
@@ -3143,7 +5424,7 @@ class _ExportConfigScreenState extends State<ExportConfigScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 22),
+          const SizedBox(height: 20),
           const Text('Select Resolution', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
           const SizedBox(height: 12),
           Row(
@@ -3157,23 +5438,33 @@ class _ExportConfigScreenState extends State<ExportConfigScreen> {
               _resCard('Original', 'Max/4K'),
             ],
           ),
-          const SizedBox(height: 20),
+          const SizedBox(height: 16),
           Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(14),
-            ),
-            child: SwitchListTile(
-              contentPadding: EdgeInsets.zero,
-              title: const Text('Save to Gallery'),
-              subtitle: const Text('Album: Viral Clip Studio'),
-              value: _saveToGallery,
-              activeThumbColor: AppColors.neonPurple,
-              onChanged: _isExporting ? null : (v) => setState(() => _saveToGallery = v),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+            decoration: BoxDecoration(color: AppColors.surface, borderRadius: BorderRadius.circular(14)),
+            child: Column(
+              children: [
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('60 FPS Smooth Gaming Mode'),
+                  subtitle: const Text('Ultra-smooth motion (Gameplay/Action)'),
+                  value: _use60Fps,
+                  activeThumbColor: AppColors.neonCyan,
+                  onChanged: _isExporting ? null : (v) => setState(() => _use60Fps = v),
+                ),
+                const Divider(color: Colors.white12, height: 1),
+                SwitchListTile(
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Save to Gallery'),
+                  subtitle: const Text('Album: Viral Clip Studio'),
+                  value: _saveToGallery,
+                  activeThumbColor: AppColors.neonPurple,
+                  onChanged: _isExporting ? null : (v) => setState(() => _saveToGallery = v),
+                ),
+              ],
             ),
           ),
-          const SizedBox(height: 28),
+          const SizedBox(height: 24),
           if (_isExporting) ...[
             const LinearProgressIndicator(color: AppColors.neonPink, backgroundColor: Colors.white12),
             const SizedBox(height: 12),
@@ -3310,314 +5601,6 @@ class ExportSuccessScreen extends StatelessWidget {
             ],
           ),
         ),
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// 8. AUTO-SPLIT SHORTS SCREEN
-// ============================================================================
-class AutoSplitScreen extends StatefulWidget {
-  final Future<void> Function(String path) onExported;
-
-  const AutoSplitScreen({super.key, required this.onExported});
-
-  @override
-  State<AutoSplitScreen> createState() => _AutoSplitScreenState();
-}
-
-class _AutoSplitScreenState extends State<AutoSplitScreen> {
-  String? _videoPath;
-  String _videoName = 'Koi video select nahi hai';
-  int _chunkSec = 30;
-  bool _crop9x16 = true;
-  bool _isProcessing = false;
-  String _status = '';
-
-  Future<void> _pickVideo() async {
-    final res = await FilePicker.platform.pickFiles(type: FileType.video);
-    if (res != null && res.files.single.path != null) {
-      setState(() {
-        _videoPath = res.files.single.path;
-        _videoName = res.files.single.name;
-      });
-    }
-  }
-
-  Future<void> _runSplit() async {
-    if (_videoPath == null) return;
-    setState(() {
-      _isProcessing = true;
-      _status = 'Video duration read ho raha hai...';
-    });
-
-    try {
-      final hasAccess = await Gal.hasAccess(toAlbum: true);
-      if (!hasAccess) await Gal.requestAccess(toAlbum: true);
-
-      final ctrl = VideoPlayerController.file(File(_videoPath!));
-      await ctrl.initialize();
-      final totalMs = ctrl.value.duration.inMilliseconds;
-      await ctrl.dispose();
-
-      if (totalMs <= 0) throw Exception('Video duration read nahi ho paya');
-
-      final chunkMs = _chunkSec * 1000;
-      final segments = <List<int>>[];
-      int start = 0;
-      while (start < totalMs) {
-        int end = start + chunkMs;
-        if (end > totalMs) end = totalMs;
-        if ((end - start) < 2000 && segments.isNotEmpty) break;
-        segments.add([start, end]);
-        start = end;
-      }
-
-      int saved = 0;
-      for (int i = 0; i < segments.length; i++) {
-        if (!mounted) return;
-        setState(() => _status = 'Part ${i + 1} / ${segments.length} export ho raha hai...');
-
-        var editor = VideoEditorBuilder(videoPath: _videoPath!)
-            .trim(startTimeMs: segments[i][0], endTimeMs: segments[i][1]);
-        if (_crop9x16) {
-          editor = editor.crop(aspectRatio: VideoAspectRatio.ratio9x16);
-        }
-        final outPath = await editor.export();
-        if (outPath != null) {
-          await Gal.putVideo(outPath, album: 'Viral Clip Studio');
-          await widget.onExported(outPath);
-          saved++;
-        }
-      }
-
-      if (!mounted) return;
-      if (saved > 0) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('$saved parts Gallery -> Viral Clip Studio mein save ho gaye!'),
-            backgroundColor: Colors.green.shade700,
-          ),
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Error: $e'), backgroundColor: Colors.redAccent),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-          _isProcessing = false;
-          _status = '';
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Auto-Split Shorts')),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.white10),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text(
-                  'Long Video -> Multiple Shorts Parts',
-                  style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 8),
-                Text(_videoName, style: const TextStyle(color: AppColors.neonCyan, fontSize: 13)),
-                const SizedBox(height: 12),
-                OutlinedButton.icon(
-                  onPressed: _isProcessing ? null : _pickVideo,
-                  icon: const Icon(Icons.video_library_rounded),
-                  label: const Text('Select Long Video'),
-                ),
-                const SizedBox(height: 18),
-                const Text('Har Part ki Length:', style: TextStyle(fontWeight: FontWeight.w600)),
-                const SizedBox(height: 8),
-                Wrap(
-                  spacing: 8,
-                  children: [15, 30, 45, 60].map((sec) {
-                    return ChoiceChip(
-                      label: Text('${sec}s'),
-                      selected: _chunkSec == sec,
-                      selectedColor: AppColors.neonPurple,
-                      onSelected: (_) => setState(() => _chunkSec = sec),
-                    );
-                  }).toList(),
-                ),
-                const SizedBox(height: 8),
-                SwitchListTile(
-                  contentPadding: EdgeInsets.zero,
-                  title: const Text('9:16 Vertical Shorts Crop'),
-                  value: _crop9x16,
-                  activeThumbColor: AppColors.neonCyan,
-                  onChanged: _isProcessing ? null : (v) => setState(() => _crop9x16 = v),
-                ),
-                const SizedBox(height: 14),
-                if (_isProcessing) ...[
-                  const LinearProgressIndicator(color: AppColors.neonCyan),
-                  const SizedBox(height: 8),
-                  Text(_status, textAlign: TextAlign.center, style: const TextStyle(color: AppColors.neonCyan)),
-                  const SizedBox(height: 12),
-                ],
-                ElevatedButton.icon(
-                  onPressed: (_isProcessing || _videoPath == null) ? null : _runSplit,
-                  icon: const Icon(Icons.content_cut_rounded),
-                  label: const Text('Auto-Split & Save All Parts'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.neonBlue,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-// ============================================================================
-// 9. MULTI-CLIP MERGER SCREEN
-// ============================================================================
-class MultiClipMergerScreen extends StatefulWidget {
-  final Future<void> Function(String path) onExported;
-
-  const MultiClipMergerScreen({super.key, required this.onExported});
-
-  @override
-  State<MultiClipMergerScreen> createState() => _MultiClipMergerScreenState();
-}
-
-class _MultiClipMergerScreenState extends State<MultiClipMergerScreen> {
-  List<String> _paths = [];
-  List<String> _names = [];
-  bool _isProcessing = false;
-
-  Future<void> _pickVideos() async {
-    final res = await FilePicker.platform.pickFiles(type: FileType.video, allowMultiple: true);
-    if (res == null) return;
-    final paths = <String>[];
-    final names = <String>[];
-    for (final f in res.files) {
-      if (f.path != null) {
-        paths.add(f.path!);
-        names.add(f.name);
-      }
-    }
-    if (paths.isNotEmpty) {
-      setState(() {
-        _paths = paths;
-        _names = names;
-      });
-    }
-  }
-
-  Future<void> _merge() async {
-    if (_paths.length < 2) return;
-    setState(() => _isProcessing = true);
-    try {
-      final hasAccess = await Gal.hasAccess(toAlbum: true);
-      if (!hasAccess) await Gal.requestAccess(toAlbum: true);
-
-      final outPath = await VideoEditorBuilder(videoPath: _paths.first)
-          .merge(otherVideoPaths: _paths.sublist(1))
-          .export();
-
-      if (outPath == null) throw Exception('Merge failed');
-      await Gal.putVideo(outPath, album: 'Viral Clip Studio');
-      await widget.onExported(outPath);
-
-      if (!mounted) return;
-      await Navigator.of(context).pushReplacement(
-        MaterialPageRoute(
-          builder: (_) => ExportSuccessScreen(outputPath: outPath, savedToGallery: true),
-        ),
-      );
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Merge error: $e'), backgroundColor: Colors.redAccent),
-        );
-      }
-    } finally {
-      if (mounted) setState(() => _isProcessing = false);
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Multi-Clip Merger')),
-      body: ListView(
-        padding: const EdgeInsets.all(20),
-        children: [
-          Container(
-            padding: const EdgeInsets.all(18),
-            decoration: BoxDecoration(
-              color: AppColors.surface,
-              borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: Colors.white10),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                const Text('2+ Videos Jod Kar Ek Banayein', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold)),
-                const SizedBox(height: 12),
-                if (_names.isNotEmpty)
-                  ..._names.asMap().entries.map(
-                        (e) => Padding(
-                          padding: const EdgeInsets.only(bottom: 6),
-                          child: Text(
-                            '${e.key + 1}. ${e.value}',
-                            style: const TextStyle(color: AppColors.neonCyan, fontSize: 13),
-                          ),
-                        ),
-                      ),
-                const SizedBox(height: 8),
-                OutlinedButton.icon(
-                  onPressed: _isProcessing ? null : _pickVideos,
-                  icon: const Icon(Icons.playlist_add_rounded),
-                  label: Text(_paths.isEmpty ? 'Select 2 or More Videos' : '${_paths.length} Videos Selected'),
-                ),
-                const SizedBox(height: 16),
-                if (_isProcessing) ...[
-                  const LinearProgressIndicator(color: AppColors.neonPink),
-                  const SizedBox(height: 12),
-                ],
-                ElevatedButton.icon(
-                  onPressed: (_isProcessing || _paths.length < 2) ? null : _merge,
-                  icon: const Icon(Icons.merge_type_rounded),
-                  label: Text(_isProcessing ? 'Merging...' : 'Merge & Save to Gallery'),
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: AppColors.neonPurple,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(vertical: 15),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ],
       ),
     );
   }
